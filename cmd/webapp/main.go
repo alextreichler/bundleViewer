@@ -39,6 +39,7 @@ func openBrowser(url string) {
 
 func main() {
 	port := flag.Int("port", 7575, "Port to listen on")
+	host := flag.String("host", "127.0.0.1", "Host to bind to (default: 127.0.0.1 for security)")
 	persist := flag.Bool("persist", false, "Persist the database between runs (default: clean on start)")
 	logsOnly := flag.Bool("logs-only", false, "Only process and display logs")
 	
@@ -123,13 +124,14 @@ func main() {
 		srvInstance.SetDataDir(dataDir)
 	}
 
-	addr := fmt.Sprintf(":%d", *port)
+	addr := fmt.Sprintf("%s:%d", *host, *port)
 	logger.Info("Server listening on", "address", addr)
 
 	// Automatically open browser
 	go func() {
 		// Wait a brief moment for server to start
 		time.Sleep(200 * time.Millisecond)
+		// We always open localhost in the browser for user convenience
 		url := fmt.Sprintf("http://localhost:%d", *port)
 		openBrowser(url)
 	}()
