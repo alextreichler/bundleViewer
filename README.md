@@ -56,21 +56,33 @@ curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/ins
 
 ## 🖥️ Usage
 
-Run the tool by pointing it to a directory containing an unzipped Redpanda debug bundle.
+Run the tool by pointing it to a directory containing an unzipped Redpanda debug bundle, or simply run it without arguments to use the interactive setup wizard.
+
+### 1. Interactive Mode (Recommended)
+Simply run the command without arguments. BundleViewer will automatically open your default browser, where you can paste the path to your bundle:
+
+```bash
+bundleViewer
+```
+
+### 2. Direct Mode
+Provide the path directly via the CLI:
+
+```bash
+bundleViewer /path/to/extracted/bundle
+```
 
 ### Using Task
+If you are developing locally:
 ```bash
 task run -- /path/to/extracted/bundle
 ```
 
-### Using the Binary
-```bash
-./bundleViewer [options] <bundle-directory>
-```
-
 ### Options
 *   `-port <int>`: Port to listen on (default: `7575`).
+*   `-host <string>`: Host to bind to (default: `127.0.0.1` for security).
 *   `-persist`: Keep the SQLite database (`bundle.db`) after the server stops. By default, the database is cleaned up on start to ensure a fresh state for new bundles.
+*   `-logs-only`: Only process and display logs (skips metrics and system parsing for faster loading).
 
 ## 🏗️ Architecture
 
