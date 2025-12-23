@@ -27,6 +27,17 @@ BundleViewer is a specialized offline analysis tool designed for **Redpanda diag
 
 ## 📦 Installation
 
+### 1. One-Line Installation (Recommended)
+You can install the latest version of BundleViewer directly to `/usr/local/bin` using the following command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/install.sh | sh
+```
+
+*This script auto-detects your OS (macOS/Linux) and architecture (amd64/arm64) and fetches the correct binary.*
+
+### 2. Manual Installation (From Source)
+
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/alextreichler/bundleViewer.git

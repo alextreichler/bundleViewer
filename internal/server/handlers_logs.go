@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -296,12 +297,44 @@ func (s *Server) apiLogAnalysisDataHandler(w http.ResponseWriter, r *http.Reques
 }
 func (s *Server) apiLogContextHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	filePath := query.Get("filePath")
+	requestedPath := query.Get("filePath")
 	lineNumberStr := query.Get("lineNumber")
 	contextSizeStr := query.Get("contextSize")
 
-	if filePath == "" || lineNumberStr == "" {
+	if requestedPath == "" || lineNumberStr == "" {
 		http.Error(w, "Missing required parameters: filePath and lineNumber", http.StatusBadRequest)
+		return
+	}
+
+	// Security: Validate that the file is within the bundle directory
+	// Clean the requested path to resolve .. and symlinks roughly
+	cleanRequested := filepath.Clean(requestedPath)
+	
+	// Determine the absolute path of the bundle for comparison
+	absBundlePath, err := filepath.Abs(s.bundlePath)
+	if err != nil {
+		s.logger.Error("Failed to resolve absolute bundle path", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// The requestedPath might be absolute or relative. 
+	// If it's absolute, check prefix. If relative, join with bundle path first.
+	var absRequested string
+	if filepath.IsAbs(cleanRequested) {
+		absRequested = cleanRequested
+	} else {
+		absRequested = filepath.Join(absBundlePath, cleanRequested)
+	}
+
+	// Final Clean
+	absRequested = filepath.Clean(absRequested)
+
+	// Check if the resolved path starts with the bundle directory
+	// We use the volume separator logic to be robust across OSs
+	if !strings.HasPrefix(absRequested, absBundlePath) {
+		s.logger.Warn("Security: Attempted path traversal", "requested", requestedPath, "resolved", absRequested, "base", absBundlePath)
+		http.Error(w, "Forbidden: File access denied", http.StatusForbidden)
 		return
 	}
 
@@ -320,9 +353,9 @@ func (s *Server) apiLogContextHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	file, err := os.Open(filePath)
+	file, err := os.Open(absRequested)
 	if err != nil {
-		s.logger.Error("Error opening file for context", "path", filePath, "error", err)
+		s.logger.Error("Error opening file for context", "path", absRequested, "error", err)
 		http.Error(w, "Failed to open log file", http.StatusInternalServerError)
 		return
 	}
