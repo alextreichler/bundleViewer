@@ -1,0 +1,714 @@
+:root {
+    /* Modern Light Theme (Default) */
+    --primary-color: #2563eb; /* Inter Blue */
+    --primary-hover: #1d4ed8;
+    --bg-color: #f8fafc; /* Slate 50 */
+    --card-bg: #ffffff;
+    --text-color: #334155; /* Slate 700 */
+    --text-color-muted: #64748b; /* Slate 500 */
+    --border-color: #e2e8f0; /* Slate 200 */
+    --header-bg-color: #ffffff;
+    --link-color: #2563eb;
+    --link-hover: #1e40af;
+    
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    
+    --radius: 0.5rem;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+html[data-theme="dark"] {
+    --primary-color: #3b82f6;
+    --primary-hover: #60a5fa;
+    --bg-color: #0f172a; /* Slate 900 */
+    --card-bg: #1e293b; /* Slate 800 */
+    --text-color: #e2e8f0; /* Slate 200 */
+    --text-color-muted: #94a3b8; /* Slate 400 */
+    --border-color: #334155; /* Slate 700 */
+    --header-bg-color: #1e293b;
+    --link-color: #3b82f6;
+    --link-hover: #60a5fa;
+}
+
+html[data-theme="ultra-dark"] {
+    --bg-color: #000000;
+    --card-bg: #0a0a0a;
+    --text-color: #ededed;
+    --border-color: #262626;
+    --header-bg-color: #0a0a0a;
+    --link-color: #3b82f6;
+}
+
+/* Retro Theme */
+html[data-theme="retro"] {
+    --bg-color: #1a0b2e;
+    --card-bg: #2d1b4e;
+    --text-color: #00ffff;
+    --border-color: #ff00ff;
+    --header-bg-color: #2d1b4e;
+    --link-color: #00e5ff;
+    --primary-color: #ff00ff;
+    --text-color-muted: #00cccc;
+    --radius: 0; /* Retro usually means sharp corners */
+}
+html[data-theme="retro"] body {
+    font-family: 'Courier New', Courier, monospace;
+}
+html[data-theme="retro"] .card, 
+html[data-theme="retro"] nav, 
+html[data-theme="retro"] th,
+html[data-theme="retro"] button,
+html[data-theme="retro"] input,
+html[data-theme="retro"] select {
+    border: 1px solid var(--border-color);
+    box-shadow: 4px 4px 0px var(--border-color);
+    border-radius: 0;
+}
+
+html[data-theme="retro"] .file-list-summary:hover {
+    background-color: #3d2b5e; /* Darker purple, distinct from magenta border/primary */
+}
+
+html[data-theme="retro"] .badge {
+    background-color: #ff00ff;
+    color: #1a0b2e;
+    border: 1px solid #00ffff;
+}
+
+html[data-theme="retro"] nav a {
+    color: #00cccc; /* Brighter than muted, but distinct from active */
+}
+
+html[data-theme="retro"] nav a:hover {
+    color: #00ffff;
+}
+
+/* PowerShell Theme */
+html[data-theme="powershell"] {
+    --bg-color: #012456; /* PowerShell Dark Blue */
+    --card-bg: #012456;
+    --text-color: #eeedf0; /* Light Gray/White */
+    --text-color-muted: #cccccc;
+    --border-color: #cccccc;
+    --header-bg-color: #012456;
+    --link-color: #ffff00; /* Yellow */
+    --primary-color: #cccccc; /* Button border color essentially */
+    --primary-hover: #ffffff;
+    --radius: 0;
+}
+
+html[data-theme="powershell"] body {
+    font-family: 'Consolas', 'Lucida Console', monospace;
+}
+
+html[data-theme="powershell"] table, 
+html[data-theme="powershell"] th, 
+html[data-theme="powershell"] td, 
+html[data-theme="powershell"] pre, 
+html[data-theme="powershell"] button, 
+html[data-theme="powershell"] input, 
+html[data-theme="powershell"] select,
+html[data-theme="powershell"] nav,
+html[data-theme="powershell"] .card {
+    border-color: #cccccc;
+    background-color: #012456;
+    color: #eeedf0;
+    font-family: 'Consolas', 'Lucida Console', monospace;
+    box-shadow: none;
+}
+
+html[data-theme="powershell"] nav a:hover {
+    background-color: #003366;
+    text-decoration: none;
+    color: #ffff00;
+}
+
+html[data-theme="powershell"] tr:nth-child(even) {
+    background-color: #012456;
+}
+html[data-theme="powershell"] tr:hover {
+    background-color: #003366;
+}
+
+html[data-theme="powershell"] .file-list-summary:hover {
+    background-color: #003366;
+}
+
+html[data-theme="powershell"] .log-level-ERROR { color: #ff3333; font-weight: bold; }
+html[data-theme="powershell"] .log-level-WARN { color: #ffff00; font-weight: bold; }
+html[data-theme="powershell"] .log-level-INFO { color: #eeedf0; }
+html[data-theme="powershell"] .log-level-DEBUG { color: #00ffff; }
+html[data-theme="powershell"] .log-level-TRACE { color: #aaaaaa; }
+
+/* Compact Theme */
+html[data-theme="compact"] {
+    font-size: 13px;
+    --radius: 4px;
+}
+html[data-theme="compact"] .card, 
+html[data-theme="compact"] table {
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+}
+html[data-theme="compact"] th, 
+html[data-theme="compact"] td {
+    padding: 0.25rem 0.5rem;
+}
+html[data-theme="compact"] h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+html[data-theme="compact"] h2 { font-size: 1.2rem; margin-top: 1.5rem; }
+
+/* Base Reset & Typography */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    margin-top: 0;
+    font-weight: 600;
+    line-height: 1.25;
+    color: var(--text-color);
+}
+
+h1 { font-size: 1.875rem; margin-bottom: 1.5rem; }
+h2 { font-size: 1.5rem; margin-bottom: 1rem; margin-top: 2rem; border-bottom: none; }
+h3 { font-size: 1.25rem; margin-bottom: 0.75rem; }
+
+a {
+    color: var(--link-color);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+a:hover {
+    color: var(--link-hover);
+    text-decoration: underline;
+}
+
+code, pre {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+}
+
+/* Layout */
+.container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 1rem 2rem 1rem;
+}
+
+/* Components: Navbar */
+nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    background-color: var(--header-bg-color);
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-sm);
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+nav a {
+    color: var(--text-color-muted);
+    font-weight: 500;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius);
+    transition: all 0.2s;
+}
+
+nav a:hover {
+    color: var(--primary-color);
+    background-color: var(--bg-color);
+    text-decoration: none;
+}
+
+nav a.active {
+    color: var(--primary-color);
+    background-color: color-mix(in srgb, var(--primary-color) 10%, transparent);
+    font-weight: 600;
+}
+
+.nav-sep {
+    color: var(--border-color);
+    margin: 0 0.25rem;
+}
+
+/* Components: Card */
+.card, .metric-card {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow-sm);
+}
+
+/* Components: Buttons & Inputs */
+button, .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+    color: #ffffff;
+    background-color: var(--primary-color);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+}
+
+button:hover, .button:hover {
+    background-color: var(--primary-hover);
+    text-decoration: none;
+}
+
+/* General Input Styling - Default to width: 100% for block layouts */
+input[type="text"], 
+input[type="datetime-local"], 
+select {
+    display: block;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: var(--text-color);
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+/* Scoped Input Styling for specific contexts where auto width is better */
+.log-filters input[type="text"], 
+.log-filters input[type="datetime-local"], 
+.log-filters select,
+form[action="/search"] input[type="text"] {
+    width: auto; /* Allow auto width in filters */
+    min-width: 150px;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 20%, transparent);
+}
+
+/* Components: Tables */
+table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+th, td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+th {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-weight: 600;
+    font-size: 0.875rem;
+    white-space: nowrap;
+}
+
+th:last-child, td:last-child {
+    border-right: none;
+}
+
+tr:last-child td {
+    border-bottom: none;
+}
+
+tr:hover td {
+    background-color: color-mix(in srgb, var(--primary-color) 5%, transparent);
+}
+
+/* Utility: Badges */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 9999px;
+    background-color: var(--border-color);
+    color: var(--text-color);
+}
+
+/* Log Analysis Specifics */
+.log-level-ERROR { color: #ef4444; }
+.log-level-WARN { color: #f59e0b; }
+.log-level-INFO { color: #10b981; }
+.log-level-DEBUG { color: #3b82f6; }
+
+mark {
+    background-color: #fef08a; /* Yellow 200 */
+    color: #854d0e; /* Yellow 800 */
+    padding: 0 0.125rem;
+    border-radius: 0.125rem;
+}
+
+[data-theme="dark"] mark {
+    background-color: #854d0e;
+    color: #fef08a;
+}
+
+/* Theme Switcher - Top Right Hover Dropdown */
+.theme-switch-wrapper {
+    position: absolute;
+    top: 0.75rem;
+    right: 1rem;
+    z-index: 2000;
+}
+
+.theme-selection-container {
+    position: relative;
+    display: inline-block;
+    padding-bottom: 10px; /* Small buffer to keep hover active */
+}
+
+.theme-toggle-btn, .theme-select-btn, .bundle-select-btn {
+    background-color: var(--card-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    box-shadow: var(--shadow-sm);
+}
+
+.theme-menu, .theme-select-menu, .bundle-select-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: var(--card-bg);
+    min-width: 160px;
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    display: none;
+    z-index: 2001;
+    overflow: hidden;
+    /* Bridge the gap between button and menu so hover doesn't flicker */
+    padding-top: 0; 
+}
+
+/* Invisible bridge to prevent menu from closing when moving mouse from button to menu */
+.theme-menu::before, .theme-select-menu::before, .bundle-select-menu::before {
+    content: '';
+    position: absolute;
+    top: -20px; /* Extends above the menu */
+    left: 0;
+    right: 0;
+    height: 20px;
+    background: transparent;
+}
+
+.theme-selection-container:hover .theme-menu, 
+.theme-selection-container:hover .theme-select-menu,
+.theme-selection-container:hover .bundle-select-menu {
+    display: block;
+}
+
+.theme-option, .theme-select-option, .bundle-select-option {
+    color: var(--text-color);
+    padding: 0.75rem 1rem;
+    text-decoration: none;
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background-color 0.2s;
+}
+
+.theme-option:hover, .theme-select-option:hover, .bundle-select-option:hover {
+    background-color: var(--bg-color);
+    color: var(--primary-color);
+}
+
+.theme-option.active-theme, .theme-select-option.active-theme, .bundle-select-option.active-theme {
+    font-weight: 600;
+    background-color: color-mix(in srgb, var(--primary-color) 10%, transparent);
+    color: var(--primary-color);
+}
+
+/* Adjust Nav to make room for theme switcher and second line */
+nav {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0.75rem 1rem;
+    padding-right: 320px; /* Increased space for both Switch and Themes */
+    gap: 0.5rem;
+}
+
+.nav-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-info-bar {
+    font-size: 0.75rem;
+    color: var(--text-color-muted);
+    font-weight: 500;
+    padding-left: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-bundle-name {
+    color: var(--primary-color);
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+
+
+/* Grid Layouts */
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+
+/* Timeline Specifics */
+.timeline-container::after {
+    background-color: var(--border-color);
+}
+.timeline-content {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Loading Overlay */
+#loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    backdrop-filter: blur(4px);
+    background-color: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+#loading-box {
+    background-color: var(--card-bg);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    padding: 2rem;
+    border-radius: var(--radius);
+    text-align: center;
+    max-width: 400px;
+    width: 90%;
+}
+
+/* File List Styles (for Home Page) */
+.file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background-color: var(--card-bg);
+    overflow: hidden;
+}
+
+.file-list-item {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.file-list-item:last-child {
+    border-bottom: none;
+}
+
+.file-list-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    background-color: var(--bg-color);
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.file-list-summary:hover {
+    background-color: var(--border-color);
+}
+
+.file-list-summary::-webkit-details-marker {
+    display: none;
+}
+
+.file-list-content {
+    padding: 1rem;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--card-bg);
+}
+
+.file-name {
+    font-family: var(--font-mono);
+    color: var(--primary-color);
+}
+
+/* Custom Multi-Select Styles */
+.custom-multiselect-container {
+    position: relative;
+    display: block;
+    width: 200px; /* Adjust as needed */
+    font-size: 0.875rem;
+}
+
+.custom-multiselect-button {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 2px 28px 2px 6px; /* Right padding for arrow */
+    cursor: pointer;
+    min-height: 38px;
+    height: auto; /* Allow growth if really needed, but pills limit it */
+    position: relative;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+}
+
+.custom-multiselect-button::after {
+    content: '';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid var(--text-color-muted);
+}
+
+.custom-multiselect-button.placeholder {
+    color: var(--text-color-muted);
+    padding: 0.5rem 0.75rem; /* Standard padding for text */
+}
+
+.multiselect-pill {
+    background-color: var(--border-color); /* Fallback */
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    max-width: 150px;
+    color: var(--text-color);
+    border: 1px solid transparent;
+}
+
+/* Theme specifics for pills */
+html[data-theme="light"] .multiselect-pill {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+}
+
+html[data-theme="dark"] .multiselect-pill {
+    background-color: #334155;
+    border: 1px solid #475569;
+}
+
+.multiselect-pill-remove {
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--text-color-muted);
+    font-size: 14px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
+.multiselect-pill-remove:hover {
+    color: #ef4444; /* Red */
+}
+
+.more-pill {
+    background-color: transparent !important;
+    border: 1px dashed var(--border-color) !important;
+    color: var(--text-color-muted);
+    padding: 2px 6px;
+}
+
+.custom-multiselect-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-md);
+    z-index: 1002;
+    max-height: 250px;
+    overflow-y: auto;
+    margin-top: 4px;
+}
+
+.custom-multiselect-container.open .custom-multiselect-dropdown {
+    display: block;
+}
+
+.custom-multiselect-option {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background-color 0.1s;
+}
+
+.custom-multiselect-option:hover {
+    background-color: var(--bg-color);
+}
+
+.custom-multiselect-option input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}

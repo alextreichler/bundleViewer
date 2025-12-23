@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>BundleViewer - Setup</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    <div class="theme-switch-wrapper">
+        <div class="theme-selection-container">
+            <button class="theme-select-btn">Themes</button>
+            <div class="theme-select-menu">
+                <button class="theme-select-option" data-theme="light">Light</button>
+                <button class="theme-select-option" data-theme="dark">Dark</button>
+                <button class="theme-select-option" data-theme="ultra-dark">Ultra Dark</button>
+                <button class="theme-select-option" data-theme="retro">Retro</button>
+                <button class="theme-select-option" data-theme="compact">Compact</button>
+                <button class="theme-select-option" data-theme="powershell">Powershell</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" style="display: none;">
+		<div id="loading-box">
+			<h2 id="loading-title">Initializing...</h2>
+			<div id="progress-container">
+				<div id="progress-bar">0%</div>
+			</div>
+            <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem;">Parsing bundle files...</p>
+		</div>
+	</div>
+
+    <div class="container" style="height: 100vh; display: flex; align-items: center; justify-content: center;">
+        <div class="card" style="max-width: 500px; width: 100%;">
+            <div style="text-align: center; margin-bottom: 2rem;">
+                <h1 style="margin-bottom: 0.5rem;">Welcome to BundleViewer</h1>
+                <p style="color: var(--text-color-muted);">Select a Redpanda diagnostic bundle to analyze.</p>
+            </div>
+
+            <form hx-post="/api/setup" hx-target="body" hx-indicator="#loading-overlay" onsubmit="startProgress()">
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Bundle Directory Path</label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="bundlePath" name="bundlePath" placeholder="/path/to/extracted/bundle" required style="flex-grow: 1;">
+                        <button type="button" class="button" style="background-color: var(--card-bg); color: var(--text-color); border: 1px solid var(--border-color); white-space: nowrap;" onclick="browseFolders()">Browse...</button>
+                    </div>
+                    <p style="font-size: 0.75rem; color: var(--text-color-muted); margin-top: 0.5rem;">Provide the absolute path to the directory containing the unzipped bundle files.</p>
+                </div>
+
+                <div style="margin-bottom: 2rem; display: flex; align-items: center; gap: 0.75rem;">
+                    <input type="checkbox" id="logsOnly" name="logsOnly" style="width: auto;">
+                    <label for="logsOnly" style="font-weight: 500; cursor: pointer;">Logs Only Mode</label>
+                </div>
+
+                <div style="display: flex; gap: 1rem;">
+                    <button type="submit" style="flex-grow: 2; padding: 0.75rem; font-size: 1rem;">Start Analysis</button>
+                    {{if .CanCancel}}
+                    <button type="button" class="button" style="flex-grow: 1; padding: 0.75rem; font-size: 1rem; background-color: var(--card-bg); color: var(--text-color); border: 1px solid var(--border-color);" onclick="window.location.href='/'">Cancel</button>
+                    {{end}}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        async function browseFolders() {
+            try {
+                const response = await fetch('/api/browse');
+                const data = await response.json();
+                if (data.path) {
+                    document.getElementById('bundlePath').value = data.path;
+                }
+            } catch (err) {
+                console.error("Failed to open folder picker:", err);
+                alert("Native folder picker is only supported when running the server locally.");
+            }
+        }
+
+        function startProgress() {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.style.display = 'flex';
+            
+            const progressBar = document.getElementById('progress-bar');
+            const statusText = document.getElementById('loading-status');
+            const eventSource = new EventSource('/api/load-progress');
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                const progress = data.progress;
+                const status = data.status;
+                const finished = data.finished;
+
+                progressBar.style.width = progress + '%';
+                progressBar.textContent = progress + '%';
+                if (status) {
+                    statusText.textContent = status;
+                }
+
+                if (finished) {
+                    eventSource.close();
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                eventSource.close();
+            };
+        }
+    </script>
+</body>
+</html>

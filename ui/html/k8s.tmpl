@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Kubernetes Overview</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script src="/static/theme.js"></script>
+	<script src="/static/tables.js"></script>
+	<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "K8s" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+	<h1>Kubernetes Resources</h1>
+    <p>Node: {{.NodeHostname}}</p>
+
+    {{if not (or .Store.Pods .Store.Services .Store.ConfigMaps .Store.Endpoints .Store.Events .Store.LimitRanges .Store.PersistentVolumeClaims .Store.ReplicationControllers .Store.ResourceQuotas .Store.ServiceAccounts)}}
+        <p>No Kubernetes resources found.</p>
+    {{end}}
+
+	{{if .Store.Pods}}
+	<h2>Pods</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Node</th><th>Phase</th><th>Restarts</th><th>Containers & Resources</th><th>Labels</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.Pods}}
+		<tr id="pod-{{.Metadata.Name}}">
+			<td>
+                {{.Metadata.Name}}
+                {{range .Metadata.OwnerReferences}}
+                    <div style="font-size: 0.8em; color: var(--text-color-light);">Owner: {{.Kind}}/{{.Name}}</div>
+                {{end}}
+            </td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Spec.NodeName}}</td>
+			<td>
+                {{.Status.Phase}}
+                {{range .Status.Conditions}}
+					{{if ne .Status "True"}}
+						<div class="condition-failed" title="{{.Type}}">{{.Type}}</div>
+					{{end}}
+				{{end}}
+            </td>
+			<td>{{sumRestarts .Status.ContainerStatuses}}</td>
+			<td>
+				{{range .Spec.Containers}}
+					<div style="margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
+						<strong>{{.Name}}</strong>
+                        <div style="font-size: 0.85em; margin-bottom: 4px;">
+                            {{if .Resources.Limits}}
+                                <span title="Limits">L: {{range $k, $v := .Resources.Limits}}{{$k}}={{$v}} {{end}}</span>
+                            {{end}}
+                            {{if .Resources.Requests}}
+                                <br><span title="Requests">R: {{range $k, $v := .Resources.Requests}}{{$k}}={{$v}} {{end}}</span>
+                            {{end}}
+                        </div>
+                        <div style="font-size: 0.8em; color: var(--text-color-light);">
+                            {{if .LivenessProbe}}
+                                <div><strong>Liveness:</strong> {{template "probe" .LivenessProbe}}</div>
+                            {{end}}
+                            {{if .ReadinessProbe}}
+                                <div><strong>Readiness:</strong> {{template "probe" .ReadinessProbe}}</div>
+                            {{end}}
+                            {{if .StartupProbe}}
+                                <div><strong>Startup:</strong> {{template "probe" .StartupProbe}}</div>
+                            {{end}}
+                        </div>
+					</div>
+				{{end}}
+			</td>
+			<td>
+				{{range $k, $v := .Metadata.Labels}}
+					<div class="badge" title="{{$k}}: {{$v}}">{{$k}}</div>
+				{{end}}
+			</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{define "probe"}}
+        {{if .HTTPGet}}HTTP:{{.HTTPGet.Path}}:{{.HTTPGet.Port}}{{end}}
+        {{if .Exec}}Exec:{{range .Exec.Command}}{{.}} {{end}}{{end}}
+        {{if .TCPSocket}}TCP:{{.TCPSocket.Port}}{{end}}
+        (delay={{.InitialDelaySeconds}}s, timeout={{.TimeoutSeconds}}s, period={{.PeriodSeconds}}s, fail={{.FailureThreshold}})
+    {{end}}
+
+	{{if .Store.Events}}
+	<h2>Events</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Type</th><th>Reason</th><th>Object</th><th>Message</th><th>Count</th><th>Last Seen</th></tr></thead>
+		<tbody>
+		{{range .Store.Events}}
+		<tr class="{{if eq .Type "Warning"}}event-warning{{else}}event-normal{{end}}">
+			<td>{{.Type}}</td>
+			<td>{{.Reason}}</td>
+			<td>{{.InvolvedObject.Kind}}/{{.InvolvedObject.Name}}</td>
+			<td>{{.Message}}</td>
+			<td>{{.Count}}</td>
+			<td>{{.LastTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+	{{if .Store.Services}}
+	<h2>Services</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Type</th><th>ClusterIP</th><th>Ports</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.Services}}
+		<tr id="service-{{.Metadata.Name}}">
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+            <td>{{.Spec.Type}}</td>
+            <td>{{.Spec.ClusterIP}}</td>
+            <td>
+                {{range .Spec.Ports}}
+                    <div>{{.Port}}:{{.TargetPort}} ({{.Protocol}})</div>
+                {{end}}
+            </td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{if .Store.PersistentVolumeClaims}}
+	<h2>Persistent Volume Claims</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Status</th><th>StorageClass</th><th>Capacity</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.PersistentVolumeClaims}}
+		<tr id="pvc-{{.Metadata.Name}}">
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+            <td>{{.Status.Phase}}</td>
+            <td>{{.Spec.StorageClassName}}</td>
+            <td>{{range $k, $v := .Status.Capacity}}{{$v}}{{end}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{if .Store.LimitRanges}}
+	<h2>Limit Ranges</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.LimitRanges}}
+		<tr>
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{if .Store.ResourceQuotas}}
+	<h2>Resource Quotas</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.ResourceQuotas}}
+		<tr>
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{if .Store.ReplicationControllers}}
+	<h2>Replication Controllers</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.ReplicationControllers}}
+		<tr>
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+    {{if .Store.ServiceAccounts}}
+	<h2>Service Accounts</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.ServiceAccounts}}
+		<tr>
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+	{{if .Store.Nodes}}
+	<h2>Nodes</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Conditions</th><th>Capacity</th><th>Allocatable</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.Nodes}}
+		<tr id="node-{{.Metadata.Name}}">
+			<td>{{.Metadata.Name}}</td>
+			<td>
+				{{range .Status.Conditions}}
+					<div class="{{if eq .Status "True"}}{{if eq .Type "Ready"}}state-running{{else}}condition-failed{{end}}{{else}}{{if eq .Type "Ready"}}condition-failed{{else}}state-running{{end}}{{end}}">
+						{{.Type}}: {{.Status}}
+					</div>
+				{{end}}
+			</td>
+			<td>{{range $k, $v := .Status.Capacity}}<div>{{$k}}: {{$v}}</div>{{end}}</td>
+			<td>{{range $k, $v := .Status.Allocatable}}<div>{{$k}}: {{$v}}</div>{{end}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+	{{if .Store.StatefulSets}}
+	<h2>StatefulSets</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Replicas (Ready/Desired)</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.StatefulSets}}
+		<tr id="sts-{{.Metadata.Name}}">
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Status.ReadyReplicas}} / {{.Spec.Replicas}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+	{{if .Store.Deployments}}
+	<h2>Deployments</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Replicas (Ready/Desired)</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.Deployments}}
+		<tr id="deploy-{{.Metadata.Name}}">
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>{{.Status.ReadyReplicas}} / {{.Spec.Replicas}}</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+
+	{{if .Store.ConfigMaps}}
+	<h2>ConfigMaps</h2>
+	<table class="sortable-table">
+		<thead><tr><th>Name</th><th>Namespace</th><th>Data</th><th>Creation Time</th></tr></thead>
+		<tbody>
+		{{range .Store.ConfigMaps}}
+		<tr>
+			<td>{{.Metadata.Name}}</td>
+			<td>{{.Metadata.Namespace}}</td>
+			<td>
+				{{range $k, $v := .Data}}
+					<div style="margin-bottom: 10px;">
+						<strong>{{$k}}</strong>:
+						<pre style="font-size: 0.8em; background: var(--bg-color); padding: 5px; max-height: 200px; overflow: auto; border: 1px solid var(--border-color); white-space: pre-wrap; word-break: break-all;">{{$v}}</pre>
+					</div>
+				{{end}}
+			</td>
+			<td>{{.Metadata.CreationTimestamp}}</td>
+		</tr>
+		{{end}}
+		</tbody>
+	</table>
+	{{end}}
+</body>
+</html>

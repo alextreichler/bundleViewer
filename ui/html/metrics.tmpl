@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Metrics Overview</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    <script src="/static/chart.js"></script>
+    <script src="/static/metrics_view.js"></script>
+    <style>
+        .metric-card {
+            background-color: var(--header-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            line-height: 1;
+            margin-bottom: 0.25rem;
+        }
+        .metric-label {
+            color: var(--text-color-muted);
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+    </style>
+    {{template "nav" (dict "Active" "Metrics" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    <h1>Metrics Overview</h1>
+    <h2>Node: {{.NodeHostname}}</h2>
+
+    <div class="metric-card">
+        <h3>Metrics Explorer</h3>
+        <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+            <select id="metric-selector" style="flex-grow: 1; padding: 8px; font-size: 14px;">
+                <option value="">Select a metric to visualize...</option>
+                {{range .MetricNames}}
+                <option value="{{.}}">{{.}}</option>
+                {{end}}
+            </select>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="rate-toggle" style="width: auto;">
+                <label for="rate-toggle" style="font-size: 0.9em; white-space: nowrap;">As Rate (/s)</label>
+            </div>
+            <button onclick="loadMetricData()" style="padding: 8px 16px; background-color: var(--link-color); color: var(--bg-color); font-weight: bold;">Plot</button>
+        </div>
+        <div style="height: 400px; position: relative;">
+            <canvas id="explorerChart"></canvas>
+            <div id="explorer-loading" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.1); display: flex; justify-content: center; align-items: center; z-index: 10;">
+                Loading...
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1.25rem;">📊</span> System Resources
+            </h3>
+            <div class="grid-4">
+                <div>
+                    <div class="metric-label">Normalized CPU</div>
+                    <div class="metric-value">
+                        {{if gt .CoreCount 0}}
+                            {{printf "%.2f" (div .ResourceUsage.CPUPercentage (float64 .CoreCount))}}%
+                            <div style="font-size: 0.75rem; color: var(--text-color-muted); font-weight: normal; margin-top: -4px;">
+                                {{.CoreCount}} Cores
+                            </div>
+                        {{else}}
+                            {{printf "%.2f" .ResourceUsage.CPUPercentage}}%
+                        {{end}}
+                    </div>
+                </div>
+                <div>
+                    <div class="metric-label">Free Memory</div>
+                    <div class="metric-value" style="font-size: 1.5rem;">{{formatBytesFloat (mul .ResourceUsage.FreeMemoryMB 1048576.0)}}</div>
+                </div>
+                <div>
+                    <div class="metric-label">Free Disk</div>
+                    <div class="metric-value" style="font-size: 1.5rem;">{{formatBytesFloat (mul .ResourceUsage.FreeSpaceMB 1048576.0)}}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1.25rem;">🌐</span> Network & RPC
+            </h3>
+            <div class="grid-4">
+                <div>
+                    <div class="metric-label">Active RPC</div>
+                    <div class="metric-value">{{printf "%.0f" .Network.ActiveConnections}}</div>
+                </div>
+                <div>
+                    <div class="metric-label">RPC Errors</div>
+                    <div class="metric-value" style="{{if gt .Network.RPCErrors 0.0}}color: #ef4444;{{end}}">
+                        {{printf "%.0f" .Network.RPCErrors}}
+                    </div>
+                </div>
+            </div>
+            
+            {{if .Network.KafkaLatencies}}
+            <div style="margin-top: 1.5rem;">
+                <div class="metric-label" style="margin-bottom: 0.5rem;">Kafka Latency (Lifetime Avg)</div>
+                <table style="font-size: 0.85rem; margin-bottom: 0; border: none;">
+                    <thead>
+                        <tr>
+                            <th style="border: none; background: transparent; padding: 4px 8px;">Type</th>
+                            <th style="border: none; background: transparent; padding: 4px 8px;">Latency</th>
+                            <th style="border: none; background: transparent; padding: 4px 8px;">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Network.KafkaLatencies}}
+                        <tr>
+                            <td style="padding: 4px 8px; border: none;">{{.RequestType}}</td>
+                            <td style="padding: 4px 8px; border: none; font-family: var(--font-mono);">{{printf "%.2f" (mul .AvgLatency 1000.0)}}ms</td>
+                            <td style="padding: 4px 8px; border: none;">{{printf "%.0f" .Count}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+        </div>
+    </div>
+
+    {{if .SarData.Entries}}
+    <div class="metric-card">
+        <h3>Historical CPU Usage (SAR)</h3>
+        <div style="height: 300px;">
+            <canvas id="sarCpuChart"></canvas>
+        </div>
+        <script>
+            (function() {
+                const labels = [
+                    {{range .SarData.Entries}}"{{.Timestamp.Format "15:04:05"}}",{{end}}
+                ];
+                const userCpu = [{{range .SarData.Entries}}{{.CPUUser}},{{end}}];
+                const sysCpu = [{{range .SarData.Entries}}{{.CPUSystem}},{{end}}];
+                const idleCpu = [{{range .SarData.Entries}}{{.CPUIdle}},{{end}}];
+
+                function tryInit() {
+                    if (window.initSarChart) {
+                        window.initSarChart(labels, userCpu, sysCpu, idleCpu);
+                    } else {
+                        setTimeout(tryInit, 50);
+                    }
+                }
+                tryInit();
+            })();
+        </script>
+    </div>
+    {{end}}
+
+    {{if .ShardCPU}}
+    <div class="metric-card">
+        <h3>CPU Usage by Shard (Core)</h3>
+        <p><em>CPU utilization per shard (0-100%).</em></p>
+        <div style="height: 300px;">
+            <canvas id="shardCpuChart"></canvas>
+        </div>
+        <script>
+            (function() {
+                const labels = [
+                    {{range .ShardCPU}}"Shard {{.ShardID}}",{{end}}
+                ];
+                const data = [
+                    {{range .ShardCPU}}{{.Usage}},{{end}}
+                ];
+
+                function tryInit() {
+                    if (window.initShardCpuChart) {
+                        window.initShardCpuChart(labels, data);
+                    } else {
+                        setTimeout(tryInit, 50);
+                    }
+                }
+                tryInit();
+            })();
+        </script>
+    </div>
+    {{end}}
+
+    {{if .IOMetrics}}
+    <div class="metric-card">
+        <h3>IO Operations</h3>
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Shard</th>
+                    <th>IO Class</th>
+                    <th>Read Ops</th>
+                    <th>Write Ops</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .IOMetrics}}
+                <tr>
+                    <td>{{.ShardID}}</td>
+                    <td>{{.Class}}</td>
+                    <td>{{printf "%.0f" .ReadOps}}</td>
+                    <td>{{printf "%.0f" .WriteOps}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+
+</body>
+</html>

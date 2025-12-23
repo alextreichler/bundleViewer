@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Cluster Logs</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script src="/static/theme.js"></script>
+	<script src="/static/tables.js"></script>
+	<script src="/static/htmx.min.js"></script>
+	<script src="/static/spinner.js"></script>
+	<style>
+		.log-filters {
+			display: flex;
+			gap: 15px;
+			margin-bottom: 20px;
+			align-items: center;
+			flex-wrap: wrap;
+			background-color: var(--card-bg);
+			padding: 15px;
+			border-radius: 8px;
+			box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+			position: sticky;
+			top: 10px;
+			z-index: 100;
+		}
+		
+		.log-filters input, .log-filters select {
+			padding: 8px;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			background-color: var(--bg-color);
+			color: var(--text-color);
+		}
+		
+		.log-table {
+			font-family: 'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace;
+			font-size: 16px; /* Increased font size */
+			width: 100%;
+			border-collapse: collapse;
+		}
+		
+		.log-table th {
+			background-color: var(--th-bg);
+			color: var(--text-color);
+			text-align: left;
+			padding: 12px;
+			border-bottom: 2px solid #ddd;
+			position: sticky;
+			top: 195px; /* Offset to appear below sticky filters. Adjusted for approximate height. */
+			z-index: 90;
+		}
+		
+		.log-table td {
+			padding: 8px 12px;
+			border-bottom: 1px solid #eee;
+			vertical-align: top;
+			line-height: 1.5;
+		}
+		
+		mark {
+			background-color: #ffd700;
+			color: black;
+			border-radius: 2px;
+			padding: 0 2px;
+		}
+
+		.log-level-ERROR { color: #d32f2f; font-weight: bold; }
+		.log-level-WARN { color: #fbc02d; font-weight: bold; }
+		.log-level-INFO { color: #388e3c; }
+		.log-level-DEBUG { color: #1976d2; }
+		.log-level-TRACE { color: #757575; }
+		
+		.pagination {
+			display: flex;
+			justify-content: center;
+			gap: 10px;
+			margin-top: 20px;
+			margin-bottom: 50px;
+		}
+		
+		.pagination button {
+			padding: 8px 16px;
+			cursor: pointer;
+			background-color: var(--link-color);
+			color: white;
+			border: none;
+			border-radius: 4px;
+		}
+		
+		.pagination button:disabled {
+			background-color: #ccc;
+			cursor: not-allowed;
+		}
+
+		/* Dark mode adjustments */
+		[data-theme="dark"] .log-filters {
+			background-color: var(--card-bg);
+			border: 1px solid #444;
+		}
+		[data-theme="dark"] .log-table td {
+			border-bottom: 1px solid #444;
+		}
+		[data-theme="dark"] .log-level-ERROR { color: #ff6b6b; }
+		[data-theme="dark"] .log-level-WARN { color: #ffd93d; }
+		[data-theme="dark"] .log-level-INFO { color: #69db7c; }
+		[data-theme="dark"] .log-level-DEBUG { color: #64b5f6; }
+		[data-theme="dark"] .log-level-TRACE { color: #9e9e9e; }
+		[data-theme="dark"] mark { background-color: #5a5200; color: #e0e0e0; }
+	</style>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "Logs" "LogsOnly" .LogsOnly "Sessions" .Sessions "ActivePath" .ActivePath)}}
+
+	<div class="log-filters">
+		<!-- Section 1: Time Range & Facet Filters -->
+		<div class="filter-row primary-controls">
+			<div class="time-range-group">
+				<div class="input-group-vertical">
+					<label>From <span class="time-helper">(Earliest: {{.MinTime}})</span></label>
+					<input type="datetime-local" id="start-time" value="{{.Filter.StartTime}}" min="{{.MinTime}}" max="{{.MaxTime}}" step="1">
+				</div>
+				<div class="input-group-vertical">
+					<label>To <span class="time-helper">(Latest: {{.MaxTime}})</span></label>
+					<input type="datetime-local" id="end-time" value="{{.Filter.EndTime}}" min="{{.MinTime}}" max="{{.MaxTime}}" step="1">
+				</div>
+			</div>
+
+			<div class="facet-filters">
+				<select id="level-select" multiple>
+					<option value="ERROR" {{if containsString .Filter.Level "ERROR"}}selected{{end}}>ERROR</option>
+					<option value="WARN" {{if containsString .Filter.Level "WARN"}}selected{{end}}>WARN</option>
+					<option value="INFO" {{if containsString .Filter.Level "INFO"}}selected{{end}}>INFO</option>
+					<option value="DEBUG" {{if containsString .Filter.Level "DEBUG"}}selected{{end}}>DEBUG</option>
+					<option value="TRACE" {{if containsString .Filter.Level "TRACE"}}selected{{end}}>TRACE</option>
+				</select>
+				
+				<select id="node-select" multiple>
+					<option value="">All Nodes</option>
+					{{range .Nodes}}
+						<option value="{{.}}" {{if containsString $.Filter.Node .}}selected{{end}}>{{.}}</option>
+					{{end}}
+				</select>
+				
+				<select id="component-select" multiple>
+					<option value="">All Components</option>
+					{{range .Components}}
+						<option value="{{.}}" {{if containsString $.Filter.Component .}}selected{{end}}>{{.}}</option>
+					{{end}}
+				</select>
+
+				<select id="sort-select" style="min-width: 140px;">
+					<option value="desc" {{if eq .Filter.Sort "desc"}}selected{{end}}>Newest First</option>
+					<option value="asc" {{if eq .Filter.Sort "asc"}}selected{{end}}>Oldest First</option>
+				</select>
+			</div>
+		</div>
+
+		<!-- Section 2: Search & Actions -->
+		<div class="filter-row secondary-controls">
+			<div class="search-container">
+				<input type="text" id="query-input" placeholder="Search logs... (e.g. 'error NOT timeout' or 'pod-name')" value="{{.Filter.Search}}">
+				<div class="help-container">
+					<span class="help-icon">?</span>
+					<div class="help-tooltip">
+						<strong>Search Syntax:</strong><br>
+						• <code>word</code> : matches exact word<br>
+						• <code>"phrase"</code> : matches exact phrase<br>
+						• <code>AND</code>, <code>OR</code>, <code>NOT</code> : boolean operators<br>
+						• <code>( ... )</code> : grouping<br>
+						<br>
+						<strong>Examples:</strong><br>
+						• <code>NOT timeout</code> (exclude matches)<br>
+						• <code>error NOT timeout</code><br>
+						• <code>(failed OR crash) AND "system disk"</code>
+					</div>
+				</div>
+			</div>
+
+			<div class="action-buttons">
+				<button onclick="applyFilters()" class="primary-btn">Filter</button>
+				<button onclick="clearFilters()" class="secondary-btn">Clear</button>
+				<div class="analyze-wrapper">
+					<button id="analyze-logs-button" type="button" class="analyze-btn">Analyze</button>
+					<span id="analyze-loading-indicator">Analyzing...</span>
+				</div>
+			</div>
+		</div>
+	</div>
+
+    <style>
+        /* Enhanced Filter Layout Styles */
+        .log-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding: 20px;
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--border-color);
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 20px;
+            align-items: flex-end; /* Align to bottom for better visual flow with labels */
+        }
+
+        .primary-controls {
+            flex-wrap: wrap;
+        }
+
+        .search-container {
+            flex-grow: 1;
+            position: relative;
+            min-width: 300px;
+        }
+
+        #query-input {
+            width: 100%;
+            padding: 10px 35px 10px 12px;
+            font-size: 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background-color: var(--bg-color);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        
+        #query-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+            outline: none;
+        }
+
+        .help-container {
+            position: absolute;
+            right: 12px;
+            top: 0;
+            bottom: 0;
+            margin: auto;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            color: var(--text-color-muted);
+            cursor: help;
+            z-index: 5;
+        }
+
+        .help-icon {
+            font-weight: 700;
+            border: 1px solid var(--text-color-muted);
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            background-color: var(--bg-color);
+        }
+
+        .time-range-group {
+            display: flex;
+            gap: 15px;
+            padding-right: 20px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .input-group-vertical {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .input-group-vertical label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .time-helper {
+            font-weight: 400;
+            color: var(--text-color-muted);
+            font-size: 11px;
+            margin-left: 4px;
+        }
+
+        .input-group-vertical input[type="datetime-local"] {
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            font-size: 13px;
+            padding: 6px 8px;
+            color: var(--text-color);
+            border-radius: 4px;
+            width: 210px; /* Fixed width for better alignment */
+        }
+
+        .secondary-controls {
+            align-items: center; /* Center vertically for search bar row */
+            padding-top: 15px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .facet-filters {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: flex-end; /* Align bottoms */
+            flex-grow: 1;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .primary-btn {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            height: 38px; /* Match input height roughly */
+        }
+        
+        .primary-btn:hover { background-color: var(--primary-hover); }
+
+        .secondary-btn {
+            background-color: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            height: 38px;
+        }
+
+        .secondary-btn:hover {
+            background-color: var(--bg-color);
+            border-color: var(--text-color-muted);
+        }
+
+        .analyze-btn {
+            background-color: #7c3aed; /* Violet 600 */
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            height: 38px;
+        }
+
+        .analyze-btn:hover { background-color: #6d28d9; } /* Violet 700 */
+
+        .analyze-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #analyze-loading-indicator {
+            display: none;
+            font-size: 13px;
+            color: var(--text-color-muted);
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .time-range-group { border-right: none; padding-right: 0; width: 100%; justify-content: space-between; }
+            .input-group-vertical input[type="datetime-local"] { width: 100%; }
+            .filter-row.primary-controls { flex-direction: column; align-items: stretch; }
+        }
+
+        @media (max-width: 768px) {
+            .filter-row.secondary-controls { flex-direction: column; align-items: stretch; }
+            .action-buttons { justify-content: flex-end; }
+        }
+    </style>
+
+	<div style="margin-top: 20px; margin-bottom: 10px; text-align: right; color: var(--text-color-muted); font-size: 0.875rem; font-weight: 500;">
+		<span id="log-count-display">
+			<!-- Log count will be updated by JavaScript -->
+		</span>
+	</div>
+
+	<table class="log-table">
+		<thead>
+			<tr>
+				<th style="width: 150px;">Timestamp</th>
+				<th style="width: 60px;">Level</th>
+				<th style="width: 100px;">Node</th>
+				<th style="width: 80px;">Shard</th>
+				<th style="width: 120px;">Component</th>
+				<th>Message</th>
+				<th style="width: 80px;">Actions</th>
+			</tr>
+		</thead>
+		<tbody>
+			<!-- Logs will be dynamically loaded here by JavaScript -->
+		</tbody>
+	</table>
+
+	<div id="loading-indicator" style="text-align: center; padding: 20px;">
+		<!-- Loading text will be dynamically added by JavaScript -->
+	</div>
+
+	<style>
+		.help-tooltip {
+			visibility: hidden;
+			width: 300px;
+			background-color: var(--card-bg);
+			color: var(--text-color);
+			text-align: left;
+			border-radius: 6px;
+			padding: 10px;
+			position: absolute;
+			z-index: 100; /* Increased z-index */
+			top: 130%;
+			right: 0;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+			border: 1px solid var(--border-color);
+			font-size: 0.9em;
+			opacity: 0;
+			transition: opacity 0.2s;
+		}
+		.help-container:hover .help-tooltip {
+			visibility: visible;
+			opacity: 1;
+		}
+		.help-tooltip code {
+			background-color: var(--bg-color);
+			padding: 2px 4px;
+			border-radius: 3px;
+			font-family: monospace;
+		}
+	</style>
+
+	<script src="/static/common.js"></script>
+	<script src="/static/logs_view.js"></script>
+</body>
+</html>
+<style>
+	/* Modal styles */
+	.modal {
+		display: none; /* Hidden by default */
+		position: fixed; /* Stay in place */
+		z-index: 1001; /* Sit on top of everything (filters are 100) */
+		left: 0;
+		top: 0;
+		width: 100%;
+		height: 100%;
+		overflow: auto; /* Enable scroll if needed */
+		background-color: rgba(0,0,0,0.6); /* Black w/ opacity */
+	}
+
+	.modal-content {
+		background-color: var(--card-bg);
+		margin: 5% auto;
+		padding: 20px;
+		border: 1px solid #888;
+		width: 80%;
+		max-width: 1200px;
+		border-radius: 8px;
+		box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+		color: var(--text-color);
+	}
+
+	.modal-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding-bottom: 10px;
+		border-bottom: 1px solid #ddd;
+	}
+
+	.modal-header h2 {
+		margin: 0;
+	}
+
+	.close-button {
+		color: #aaa;
+		font-size: 28px;
+		font-weight: bold;
+		cursor: pointer;
+	}
+
+	.close-button:hover,
+	.close-button:focus {
+		color: var(--text-color);
+	}
+
+	.modal-body {
+		padding-top: 15px;
+		font-family: 'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace;
+		font-size: 14px;
+		line-height: 1.6;
+		white-space: pre-wrap; /* Wrap long lines */
+		background-color: var(--bg-color);
+		border-radius: 4px;
+		max-height: 70vh;
+		overflow-y: auto;
+	}
+
+	.log-context-line {
+		border-bottom: 2px solid var(--border-color);
+		padding: 8px 10px;
+	}
+
+	.log-context-line.even-line {
+		background-color: var(--bg-color);
+	}
+
+	.log-context-line.odd-line {
+		background-color: var(--table-alt-row-bg);
+	}
+	
+	:root {
+		--highlight-bg: #ffd700; /* Gold for light mode */
+	}
+
+	[data-theme="dark"] {
+		--highlight-bg: #5a5200; /* Darker, less vibrant yellow for dark mode */
+	}
+
+	[data-theme="ultra-dark"] {
+		--highlight-bg: #403e00; /* Even darker for ultra-dark, good contrast */
+	}
+	
+	[data-theme="retro"] {
+		--highlight-bg: #4a148c; /* A deep violet for retro highlight, providing good contrast with neon text */
+		--card-bg: #2d1b4e;
+	}
+</style>
+
+<div id="log-context-modal" class="modal">
+	<div class="modal-content">
+		<div class="modal-header">
+			<h2>Log Context</h2>
+			<span class="close-button" onclick="closeLogContext()">&times;</span>
+		</div>
+		<div id="log-context-body" class="modal-body">
+			<!-- Context will be loaded here -->
+		</div>
+	</div>
+</div>

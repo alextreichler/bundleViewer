@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Partitions Overview</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/tables.js"></script>
+	<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    							
+    							</div>    			    {{template "nav" (dict "Active" "Partitions" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    				<h1>Partitions Overview</h1>
+    <h2>Summary</h2>
+    <table>
+        <tbody>
+            <tr>
+                <th>Total Partitions</th>
+                <td>{{.TotalPartitions}}</td>
+            </tr>
+        </tbody>
+    </table>
+    <h2>Partitions per Node</h2>
+    <table id="partitions-table">
+        <thead>
+            <tr>
+                <th class="sortable">Node ID</th>
+                <th class="sortable">Partition Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $nodeID, $count := .PartitionsPerNode}}
+            <tr>
+                <td>{{$nodeID}}</td>
+                <td>{{$count}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+
+    <h2>Leaders per Node</h2>
+    <table id="leaders-table">
+        <thead>
+            <tr>
+                <th class="sortable">Node ID</th>
+                <th class="sortable">Leader Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $nodeID, $count := .LeadersPerNode}}
+            <tr>
+                <td>{{$nodeID}}</td>
+                <td>{{$count}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    <h2>Topics</h2>
+    <table id="topics-table">
+        <thead>
+            <tr>
+                <th class="sortable">Topic Name</th>
+                <th class="sortable">Partition Count</th>
+                <th class="sortable">Replication Factor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Topics}}
+            <tr onclick="toggleTopicDetails('{{.Name}}')">
+                <td><a href="#">{{.Name}}</a></td>
+                <td>{{len .Partitions}}</td>
+                <td>{{if .Partitions}}{{len (index .Partitions 0).Replicas}}{{end}}</td>
+            </tr>
+            <tr id="{{.Name}}-details" style="display:none;">
+                <td colspan="3">
+                    {{/* This will be populated by JavaScript */}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    <script src="/static/common.js"></script>
+    <script src="/static/partitions_view.js"></script>
+</body>
+</html>

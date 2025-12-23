@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Kafka Metadata</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+</head>
+<body>
+    		
+    		</div>
+    	    {{template "nav" (dict "Active" "Kafka" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    		    <h1>Kafka Metadata</h1>    <button onclick="toggleRawJson()">View Raw JSON</button>
+    		    <pre id="raw-json" style="display: none;"><code>{{if .RawJSON}}{{.RawJSON}}{{else}}Raw JSON data not available.{{end}}</code></pre>
+    <p><strong>Cluster:</strong> {{.Metadata.Cluster}}</p>
+    <p><strong>Controller:</strong> {{.Metadata.Controller}}</p>
+    <p><strong>Brokers:</strong> {{len .Metadata.Brokers}}</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Node ID</th>
+                <th>Host</th>
+                <th>Port</th>
+                <th>Rack</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Metadata.Brokers}}
+            <tr>
+                <td>{{.NodeID}}</td>
+                <td>{{.Host}}</td>
+                <td>{{.Port}}</td>
+                <td>{{if .Rack}}{{.Rack}}{{else}}N/A{{end}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+
+    <h2>Topics</h2>
+    {{range .Metadata.Topics}}
+    <div class="topic-section">
+        <h3>{{.Topic}}</h3>
+        <p><strong>ID:</strong> {{.ID}}</p>
+        <p><strong>Internal:</strong> {{.IsInternal}}</p>
+        <p><strong>Authorized Operations:</strong> {{.AuthorizedOperations}}</p>
+        <p><strong>Error:</strong> {{.Err}}</p>
+
+        <button onclick="toggleVisibility('partitions-{{.Topic}}', this)">Partitions</button>
+        <div id="partitions-{{.Topic}}" class="content" style="display: none;">
+            <table class="nested-table">
+                <thead>
+                    <tr>
+                        <th>Partition</th>
+                        <th>Leader</th>
+                        <th>Leader Epoch</th>
+                        <th>Replicas</th>
+                        <th>ISR</th>
+                        <th>Offline Replicas</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Partitions}}
+                    <tr>
+                        <td>{{.Partition}}</td>
+                        <td>{{.Leader}}</td>
+                        <td>{{.LeaderEpoch}}</td>
+                        <td>{{.Replicas}}</td>
+                        <td>{{.ISR}}</td>
+                        <td>{{.OfflineReplicas}}</td>
+                        <td>{{.Err}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+
+        {{$topicConfig := index $.TopicConfigs .Topic}}
+        {{if $topicConfig}}
+            <button onclick="toggleVisibility('config-{{.Topic}}', this)">Config</button>
+            <div id="config-{{.Topic}}" class="content" style="display: none;">
+                            <table class="nested-table">
+                                <thead>
+                                    <tr>
+                                        <th>Key</th>
+                                        <th>Value</th>
+                                        <th>Docs</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{range $topicConfig.Configs}}
+                                    <tr>
+                                        <td>
+                                            {{.Key}}
+                                            {{if .Synonyms}}
+                                                ({{range $i, $s := .Synonyms}}{{if $i}}, {{end}}{{$s.Key}}{{end}})
+                                            {{end}}
+                                        </td>
+                                        <td>{{.Value}}</td>
+                                                                <td>
+                                                                    {{$keyForUrl := .Key}}
+                                                                    {{$isTopic := (contains .Key ".")}}
+                                                                    {{if .Synonyms}}
+                                                                        {{$synonymKey := (index .Synonyms 0).Key}}
+                                                                        {{$keyForUrl = $synonymKey}}
+                                                                        {{if (contains $synonymKey ".")}}
+                                                                            {{$isTopic = true}}
+                                                                        {{else if (contains $synonymKey "_")}}
+                                                                            {{$isTopic = false}}
+                                                                        {{end}}
+                                                                    {{end}}
+                                                                    {{if $isTopic}}
+                                                                        <a href="https://docs.redpanda.com/current/reference/properties/topic-properties/#{{replace $keyForUrl "." ""}}" target="_blank">doc</a>
+                                                                    {{else}}
+                                                                        <a href="https://docs.redpanda.com/current/reference/properties/cluster-properties/#{{$keyForUrl}}" target="_blank">doc</a>
+                                                                    {{end}}
+                                                                </td>                                    </tr>
+                                    {{end}}
+                                </tbody>
+                            </table>            </div>
+        {{end}}
+    </div>
+    {{end}}
+
+    <a href="#top" id="back-to-top" title="Back to top">&uarr;</a>
+
+    <script src="/static/common.js"></script>
+    <script>
+        function toggleRawJson() {
+            var el = document.getElementById("raw-json");
+            if (el.style.display === "none") {
+                el.style.display = "block";
+            } else {
+                el.style.display = "none";
+            }
+        }
+    </script>
+</body>
+</html>
