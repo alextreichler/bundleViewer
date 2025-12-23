@@ -69,18 +69,3 @@ The project follows a standard Go project layout:
 *   `internal/server/`: HTTP handlers and routing logic.
 *   `ui/`: Contains HTML templates (`.tmpl`) and static assets (CSS, JS). These are embedded into the binary for single-file distribution.
 
-## 🤝 Contributing
-
-1.  Fork the repository.
-2.  Create a feature branch (`git checkout -b feature/amazing-feature`).
-3.  Commit your changes.
-4.  **Lint your code:**
-    ```bash
-    task lint
-    ```
-5.  Push to the branch.
-6.  Open a Pull Request.
-
-## 📝 License
-
-[Add License Here]
