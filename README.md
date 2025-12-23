@@ -1,6 +1,9 @@
 # BundleViewer
 
-BundleViewer is a specialized, high-performance offline analysis tool designed for **Redpanda diagnostic bundles**. It parses, indexes, and visualizes the complex contents of a bundle (logs, metrics, configuration, and metadata) to help support engineers and administrators diagnose cluster issues efficiently.
+BundleViewer is a specialized offline analysis tool designed for **Redpanda diagnostic bundles**. It parses, indexes, and visualizes the complex contents of a bundle (logs, metrics, configuration, and metadata).
+
+**You take on all risks when using this. Use at your own risk!**
+
 
 ## 🚀 Key Features
 
@@ -63,7 +66,7 @@ task run -- /path/to/extracted/bundle
 The project follows a standard Go project layout:
 
 *   `cmd/webapp/`: Entry point (`main.go`). Handles flag parsing and server initialization.
-*   `internal/parser/`: specialized logic for parsing Redpanda-specific file formats (JSON, YAML, text logs).
+*   `internal/parser/`: specialized logic for parsing Redpanda-specific files.
 *   `internal/store/`: Database layer. Manages the SQLite connection, schema migrations, and high-performance bulk insertion.
 *   `internal/analysis/`: Business logic for log fingerprinting and heuristic analysis.
 *   `internal/server/`: HTTP handlers and routing logic.
