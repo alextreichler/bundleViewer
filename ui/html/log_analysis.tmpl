@@ -1,0 +1,87 @@
+{{if not .Partial}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Log Analysis</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/tables.js"></script>
+    <script src="/static/htmx.min.js"></script>
+    <style>
+        .pattern-row {
+            cursor: pointer;
+        }
+        .pattern-row:hover {
+            background-color: var(--row-hover-color);
+        }
+        .signature-cell {
+            font-family: monospace;
+            font-size: 0.9em;
+            word-break: break-all;
+        }
+        .level-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 0.8em;
+        }
+        .level-ERROR { background-color: #ffcccc; color: #cc0000; }
+        .level-WARN { background-color: #fff4cc; color: #996600; }
+        .level-INFO { background-color: #ccffcc; color: #006600; }
+        .level-DEBUG { background-color: #eeeeee; color: #666666; }
+        
+        [data-theme="dark"] .level-ERROR, [data-theme="ultra-dark"] .level-ERROR { background-color: #5c0000; color: #ff9999; }
+        [data-theme="dark"] .level-WARN, [data-theme="ultra-dark"] .level-WARN { background-color: #5c4200; color: #ffcc00; }
+        [data-theme="dark"] .level-INFO, [data-theme="ultra-dark"] .level-INFO { background-color: #003300; color: #66ff66; }
+        [data-theme="dark"] .level-DEBUG, [data-theme="ultra-dark"] .level-DEBUG { background-color: #333333; color: #aaaaaa; }
+    </style>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "Logs" "LogsOnly" .LogsOnly "Sessions" .Sessions "ActivePath" .ActivePath)}}
+    
+    <h1>Log Analysis</h1>
+    <div id="analysis-content" hx-get="/api/logs/analysis" hx-trigger="load" hx-swap="outerHTML">
+        <div class="container" style="height: 60vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div class="card" style="text-align: center; max-width: 400px; width: 100%;">
+                <h2 style="margin-bottom: 1rem;">Analyzing Logs...</h2>
+                <p style="color: var(--text-color-muted); margin-bottom: 2rem;">Fingerprinting log messages and identifying recurring patterns.</p>
+                <div class="spinner" style="border: 4px solid var(--border-color); width: 48px; height: 48px; border-radius: 50%; border-left-color: var(--primary-color); animation: spin 1s linear infinite; display: inline-block;"></div>
+                <style>
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                </style>
+            </div>
+        </div>
+    </div>
+    <script src="/static/common.js"></script>
+    <script src="/static/log_analysis_view.js"></script>
+</body>
+</html>
+{{else}}
+    <p><a href="/logs">&larr; Back to Raw Logs</a></p>
+    <p>Grouping <strong>{{.TotalLogs}}</strong> log entries into <strong>{{.TotalPatterns}}</strong> unique patterns.</p>
+
+    <table class="sortable-table">
+        <thead>
+            <tr>
+                <th data-type="number">Count</th>
+                <th>Level</th>
+                <th>Signature (Fingerprint)</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Patterns}}
+            <tr class="pattern-row">
+                <td>{{.Count}}</td>
+                <td><span class="level-badge level-{{.Level}}">{{.Level}}</span></td>
+                <td class="signature-cell" title="{{.SampleEntry.Message}}">{{.Signature}}</td>
+                <td>{{.FirstSeen.Format "15:04:05"}}</td>
+                <td>{{.LastSeen.Format "15:04:05"}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+{{end}}

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Bundle Details</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script src="/static/theme.js"></script>
+	<script src="/static/tables.js"></script>
+	<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+	<div id="loading-overlay">
+		<div id="loading-box">
+			<h2>Loading...</h2>
+			<div id="progress-container">
+				<div id="progress-bar">0%</div>
+			</div>
+		</div>
+	</div>
+
+    {{template "nav" (dict "Active" "Home" "Sessions" .Sessions "ActivePath" .ActivePath)}}
+
+	<div class="container">
+		<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
+			<div>
+				<h1>Bundle Overview</h1>
+				<h2 style="margin-top: 0; font-size: 1.25rem; color: var(--text-color-muted);">Node: <span style="color: var(--text-color);">{{.NodeHostname}}</span></h2>
+				<p style="color: var(--text-color-muted); font-size: 0.875rem;">Page generated at: {{.StartupTime}}</p>
+			</div>
+			
+			<form action="/search" method="GET" style="display: flex; gap: 0.5rem; width: 100%; max-width: 400px; align-items: center;">
+				<input type="text" name="q" placeholder="Global Search..." style="flex-grow: 1;">
+				<button type="submit">Search</button>
+			</form>
+		</div>
+
+		<div class="grid-2">
+			<div class="card">
+				<h3>Cluster Status</h3>
+				<table style="margin-bottom: 0; border: none;">
+					<tbody>
+						<tr>
+							<td style="border: none; padding-left: 0;">Total Brokers</td>
+							<td style="border: none; text-align: right; font-weight: 600;">{{.TotalBrokers}}</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Version</td>
+							<td style="border: none; text-align: right; font-family: var(--font-mono);">{{.Version}}</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Rack Awareness</td>
+							<td style="border: none; text-align: right;">
+								{{if .RackAwarenessEnabled}}
+									<span class="badge" style="background-color: #dcfce7; color: #166534;">Enabled</span>
+								{{else}}
+									<span class="badge">Disabled</span>
+								{{end}}
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+
+			<div class="card">
+				<h3>Health Check</h3>
+				<table style="margin-bottom: 0; border: none;">
+					<tbody>
+						<tr>
+							<td style="border: none; padding-left: 0;">Cluster Health</td>
+							<td style="border: none; text-align: right;">
+								{{if .IsHealthy}}
+									<span class="badge" style="background-color: #dcfce7; color: #166534;">Healthy</span>
+								{{else}}
+									<span class="badge" style="background-color: #fee2e2; color: #991b1b;">Unhealthy</span>
+								{{end}}
+							</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Under Replicated Partitions</td>
+							<td style="border: none; text-align: right;">
+								{{if gt .UnderReplicatedPartitions 0}}
+									<span class="badge" style="background-color: #fee2e2; color: #991b1b;">{{.UnderReplicatedPartitions}}</span>
+								{{else}}
+									<span style="color: var(--text-color-muted);">0</span>
+								{{end}}
+							</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Leaderless Partitions</td>
+							<td style="border: none; text-align: right;">
+								{{if gt .LeaderlessPartitions 0}}
+									<span class="badge" style="background-color: #fee2e2; color: #991b1b;">{{.LeaderlessPartitions}}</span>
+								{{else}}
+									<span style="color: var(--text-color-muted);">0</span>
+								{{end}}
+							</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Nodes in Maintenance</td>
+							<td style="border: none; text-align: right;">
+								{{if gt .NodesInMaintenanceMode 0}}
+									<span class="badge" style="background-color: #fef08a; color: #854d0e;">{{.NodesInMaintenanceMode}}</span>
+									<div style="font-size: 0.75rem; color: var(--text-color-muted); margin-top: 4px;">
+										IDs: {{range $i, $id := .MaintenanceModeNodeIDs}}{{if $i}}, {{end}}{{$id}}{{end}}
+									</div>
+								{{else}}
+									<span style="color: var(--text-color-muted);">0</span>
+								{{end}}
+							</td>
+						</tr>
+						<tr>
+							<td style="border: none; padding-left: 0;">Nodes Down</td>
+							<td style="border: none; text-align: right;">
+								{{if gt .NodesDown 0}}
+									<span class="badge" style="background-color: #fee2e2; color: #991b1b;">{{.NodesDown}}</span>
+								{{else}}
+									<span style="color: var(--text-color-muted);">0</span>
+								{{end}}
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+
+		{{if .RackAwarenessEnabled}}
+		<div class="card">
+			<h3>Rack Information</h3>
+			<table>
+				<thead>
+					<tr>
+						<th>Rack Name</th>
+						<th>Broker Count</th>
+						<th>Node IDs</th>
+					</tr>
+				</thead>
+				<tbody>
+					{{range $rack, $data := .RackInfo}}
+					<tr>
+						<td>{{$rack}}</td>
+						<td>{{$data.Count}}</td>
+						<td>{{range $i, $id := $data.NodeIDs}}{{if $i}}, {{end}}{{$id}}{{end}}</td>
+					</tr>
+					{{end}}
+				</tbody>
+			</table>
+		</div>
+		{{end}}
+
+		{{range $groupName, $files := .GroupedFiles}}
+		<h2 style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem; margin-top: 2rem;">{{$groupName}}</h2>
+		
+		<div class="file-list">
+			{{range $files}}
+			<details class="file-list-item">
+				<summary class="file-list-summary">
+					<span class="file-name">📄 {{.FileName}}</span>
+					<span style="font-size: 0.75rem; color: var(--text-color-muted);">Click to expand</span>
+				</summary>
+				<div class="file-list-content">
+					{{if .Error}}
+						<p style="color: #ef4444;">Error: {{.Error}}</p>
+					{{else if eq .FileName "kafka.json"}}
+						<p><a href="/kafka">View Kafka Metadata &rarr;</a></p>
+					{{else}}
+						{{renderData .FileName .Data}}
+					{{end}}
+				</div>
+			</details>
+			{{end}}
+		</div>
+		{{end}}
+	</div>
+
+	<a href="#top" id="back-to-top" title="Back to top">&uarr;</a>
+
+	<script src="/static/common.js"></script>
+	<script src="/static/progress.js"></script>
+</body>
+</html>

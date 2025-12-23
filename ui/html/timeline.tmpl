@@ -1,0 +1,151 @@
+{{if not .Partial}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Event Timeline</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/chart.js"></script>
+    <style>
+        .timeline-container {
+            position: relative;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px 0;
+        }
+
+        /* The vertical line */
+        .timeline-container::after {
+            content: '';
+            position: absolute;
+            width: 4px;
+            background-color: var(--border-color);
+            top: 0;
+            bottom: 0;
+            left: 50px; /* Adjust for timestamp width */
+            margin-left: -2px;
+        }
+
+        .timeline-event {
+            padding: 10px 40px;
+            position: relative;
+            background-color: inherit;
+            width: 100%;
+            box-sizing: border-box;
+            display: flex;
+        }
+
+        .timeline-timestamp {
+            width: 100px; /* Fixed width for timestamp */
+            text-align: right;
+            padding-right: 20px;
+            font-size: 0.85em;
+            color: var(--text-color-light);
+            flex-shrink: 0;
+        }
+
+        .timeline-content {
+            padding: 15px;
+            background-color: var(--header-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            flex-grow: 1;
+            position: relative;
+        }
+
+        /* The circle on the line */
+        .timeline-content::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            right: 100%;
+            background-color: var(--header-bg-color);
+            border: 4px solid var(--link-color);
+            top: 15px;
+            border-radius: 50%;
+            z-index: 1;
+            margin-right: 12px; /* Distance from box */
+            transform: translateX(50%); /* Center on line */
+            left: -32px; /* Position relative to content box to hit the line at 50px */
+        }
+        
+        /* Adjust circle position based on timestamp width (100px) and line position (50px) */
+        /* Actually simpler: line is at 50px absolute. 
+           Timestamp is 0-100px.
+           Content starts at ~100px + padding.
+           Circle needs to be at 50px absolute.
+        */
+        
+        .event-Critical .timeline-content {
+            border-left: 5px solid #d32f2f;
+        }
+        .event-Critical .timeline-content::after {
+            border-color: #d32f2f;
+        }
+
+        .event-Warning .timeline-content {
+            border-left: 5px solid #fbc02d;
+        }
+        .event-Warning .timeline-content::after {
+            border-color: #fbc02d;
+        }
+
+        .event-source {
+            font-weight: bold;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+            color: var(--link-color);
+        }
+        
+        .event-desc {
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    					
+    					</div>    	    {{template "nav" (dict "Active" "Timeline" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    		<h1>Event Timeline</h1>    <p>Chronological view of critical errors, warnings, and system events.</p>
+
+    <div id="timeline-content" hx-get="/api/timeline/data" hx-trigger="load" hx-swap="outerHTML">
+        <div class="container" style="height: 60vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div class="card" style="text-align: center; max-width: 400px; width: 100%;">
+                <h2 style="margin-bottom: 1rem;">Building Timeline...</h2>
+                <p style="color: var(--text-color-muted); margin-bottom: 2rem;">Correlating logs and system events to build a chronological view.</p>
+                <div class="spinner" style="border: 4px solid var(--border-color); width: 48px; height: 48px; border-radius: 50%; border-left-color: var(--primary-color); animation: spin 1s linear infinite; display: inline-block;"></div>
+                <style>
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                </style>
+            </div>
+        </div>
+    </div>
+    <script src="/static/common.js"></script>
+    <script src="/static/timeline_view.js"></script>
+</body>
+</html>
+{{else}}
+    <div style="max-width: 1000px; margin: 0 auto;">
+        <div class="chart-container" style="position: relative; height: 150px; width: 100%; margin-bottom: 20px; background: var(--header-bg-color); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;">
+            <canvas id="timelineChart"></canvas>
+        </div>
+    </div>
+    
+    <div class="timeline-container">
+        {{range .Events}}
+        <div class="timeline-event event-{{.Level}}">
+            <div class="timeline-timestamp">
+                {{.Timestamp.Format "15:04:05"}}<br>
+                <span style="font-size: 0.8em;">{{.Timestamp.Format "Jan 02"}}</span>
+            </div>
+            <div class="timeline-content">
+                <div class="event-source">{{.Type}}: {{.Source}}</div>
+                <div class="event-desc">{{.Description}}</div>
+            </div>
+        </div>
+        {{end}}
+    </div>
+{{end}}

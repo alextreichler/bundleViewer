@@ -1,0 +1,71 @@
+version: '3'
+
+tasks:
+  build:
+    desc: "Builds the bundleViewer application for Linux and macOS"
+    deps:
+      - build:linux
+      - build:macos
+
+  build:linux:
+    desc: "Builds the bundleViewer application for Linux (amd64)"
+    cmds:
+      - GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
+    silent: false
+
+  build:macos:
+    desc: "Builds the bundleViewer application for macOS (arm64)"
+    cmds:
+      - GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+    silent: false
+
+  run:
+    desc: "Runs the bundleViewer application. Usage: task run -- -bundlePath /path/to/bundle"
+    deps:
+      - db:clean
+    cmds:
+      - GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 ./bundleViewer {{.CLI_ARGS}}
+    silent: false
+
+  clean:
+    desc: "Removes the compiled bundleViewer binaries and dist directory"
+    cmds:
+      - rm -rf dist bundleViewer bundle.db
+    silent: false
+
+  lint:
+    desc: "Runs golangci-lint on the codebase"
+    cmds:
+      - golangci-lint run
+    silent: false
+
+  deps:
+    desc: "Runs go mod tidy and vendor"
+    cmds:
+      - go mod tidy
+      - go mod vendor
+    silent: false
+
+  release:
+    desc: "Creates a GitHub release and uploads binaries. Usage: task release TAG=v1.0.0"
+    deps:
+      - build
+    cmds:
+      - |
+        if [ -z "{{.TAG}}" ]; then
+          echo "Error: TAG variable is required. Usage: task release TAG=v1.0.0"
+          exit 1
+        fi
+      - echo "Creating release {{.TAG}}..."
+      - gh release create {{.TAG}} dist/bundleViewer-linux-amd64 dist/bundleViewer-darwin-arm64 --title "{{.TAG}}" --notes "Release {{.TAG}}"
+    silent: false
+
+  db:clean:
+    desc: "Removes the bundle.db file"
+    cmds:
+      - rm -f bundle.db
+    silent: true
+
+  default:
+    cmds:
+      - task: build

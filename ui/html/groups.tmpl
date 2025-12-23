@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Consumer Groups</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+</head>
+<body>
+    {{template "nav" (dict "Active" "Groups" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    <div class="container">
+        <h1>Consumer Groups</h1>
+
+        <div class="card" style="margin-bottom: 1.5rem; padding: 1rem;">
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <div style="flex-grow: 1;">
+                    <input type="text" id="groupSearch" placeholder="Search by Group ID or Topic name..." 
+                           onkeyup="filterGroups()" 
+                           style="width: 100%; padding: 0.75rem; font-size: 1rem;">
+                </div>
+                <div id="searchStats" style="color: var(--text-color-muted); font-size: 0.875rem; min-width: 120px; text-align: right;">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+        </div>
+        
+        {{if .ConsumerGroups}}
+            <table class="data-table" id="groupsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)" style="cursor: pointer;">Group ID <span class="sort-icon">↕</span></th>
+                        <th onclick="sortTable(1)" style="cursor: pointer;">State <span class="sort-icon">↕</span></th>
+                        <th onclick="sortTable(2)" style="cursor: pointer;">Protocol <span class="sort-icon">↕</span></th>
+                        <th onclick="sortTable(3)" style="cursor: pointer;">Coordinator <span class="sort-icon">↕</span></th>
+                        <th onclick="sortTable(4)" style="cursor: pointer;">Members <span class="sort-icon">↕</span></th>
+                        <th onclick="sortTable(5)" style="cursor: pointer;">Total Lag <span class="sort-icon">↕</span></th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .ConsumerGroups}}
+                    <tr class="group-row" 
+                        data-group="{{lower .Group}}" 
+                        data-topics="{{range .Offsets}}{{lower .Topic}} {{end}}">
+                        <td style="font-family: var(--font-mono); font-weight: 600;">{{.Group}}</td>
+                        <td><span class="badge">{{.State}}</span></td>
+                        <td>{{.Protocol}} <small style="color: var(--text-color-muted)">({{.ProtocolType}})</small></td>
+                        <td>Node {{.Coordinator.NodeID}} <br><small style="color: var(--text-color-muted)">{{.Coordinator.Host}}</small></td>
+                        <td>{{len .Members}}</td>
+                        <td data-sort="{{.TotalLag}}">
+                            {{if gt .TotalLag 0}}
+                                <span style="color: var(--log-level-WARN); font-weight: 600;">{{.TotalLag}}</span>
+                            {{else}}
+                                <span style="color: var(--text-color-muted);">0</span>
+                            {{end}}
+                        </td>
+                        <td>
+                            <button class="button-sm" onclick="toggleVisibility('details-{{.Group}}', this)">View Details</button>
+                        </td>
+                    </tr>
+                    <tr id="details-{{.Group}}" class="details-row content" style="display: none;">
+                        <td colspan="7" style="background-color: var(--bg-color); padding: 1.5rem;">
+                            <div class="grid-2">
+                                <div>
+                                    <h4>Members & Assignments</h4>
+                                    {{if .Members}}
+                                    <table class="nested-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Client ID</th>
+                                                <th>Host</th>
+                                                <th>Assignments</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {{range .Members}}
+                                            <tr>
+                                                <td title="{{.MemberID}}">{{.ClientID}}</td>
+                                                <td>{{.ClientHost}}</td>
+                                                <td>
+                                                    {{if .Assigned}}
+                                                        {{range $topic, $partitions := .Assigned}}
+                                                            <div style="font-size: 0.75rem; margin-bottom: 0.25rem;">
+                                                                <strong>{{$topic}}</strong>: [{{range $i, $p := $partitions}}{{if $i}}, {{end}}{{$p}}{{end}}]
+                                                            </div>
+                                                        {{end}}
+                                                    {{else}}
+                                                        <span style="color: var(--text-color-muted); font-size: 0.75rem;">None</span>
+                                                    {{end}}
+                                                </td>
+                                            </tr>
+                                            {{end}}
+                                        </tbody>
+                                    </table>
+                                    {{else}}
+                                    <p>No active members.</p>
+                                    {{end}}
+                                </div>
+                                <div>
+                                    <h4>Committed Offsets & Lag</h4>
+                                    {{if .Offsets}}
+                                        {{range .Offsets}}
+                                        <details style="margin-bottom: 0.5rem; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--card-bg);">
+                                            <summary style="padding: 0.5rem; cursor: pointer; font-weight: 600; display: flex; justify-content: space-between;">
+                                                <span>Topic: {{.Topic}} ({{len .Partitions}} partitions)</span>
+                                                {{if gt .TopicLag 0}}
+                                                    <span style="color: var(--log-level-WARN); padding-right: 1rem;">Lag: {{.TopicLag}}</span>
+                                                {{end}}
+                                            </summary>
+                                            <div style="padding: 0.5rem;">
+                                                <table class="nested-table" style="margin-bottom: 0;">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Partition</th>
+                                                            <th>Offset</th>
+                                                            <th>Lag</th>
+                                                            <th>Error</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {{range .Partitions}}
+                                                        <tr>
+                                                            <td>{{.Partition}}</td>
+                                                            <td>{{.At}}</td>
+                                                            <td>
+                                                                {{if gt .Lag 0}}
+                                                                    <span style="color: var(--log-level-WARN); font-weight: 600;">{{.Lag}}</span>
+                                                                {{else}}
+                                                                    0
+                                                                {{end}}
+                                                            </td>
+                                                            <td>{{if .Err}}{{.Err}}{{else}}-{{end}}</td>
+                                                        </tr>
+                                                        {{end}}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </details>
+                                        {{end}}
+                                    {{else}}
+                                    <p>No committed offsets found.</p>
+                                    {{end}}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        {{else}}
+            <div class="card">
+                <p>No consumer group data found in kafka.json.</p>
+            </div>
+        {{end}}
+    </div>
+
+    <script src="/static/common.js"></script>
+    <style>
+        .button-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .data-table th {
+            text-align: left;
+            padding: 0.75rem;
+            background-color: var(--bg-color);
+            border-bottom: 2px solid var(--border-color);
+        }
+        .data-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .sort-icon {
+            margin-left: 0.25rem;
+            color: var(--text-color-muted);
+            font-size: 0.8rem;
+        }
+    </style>
+    <script>
+        let sortDirections = [true, true, true, true, true, true]; // Track sort direction for each column
+
+        function sortTable(colIndex) {
+            const table = document.getElementById("groupsTable");
+            const tbody = table.querySelector("tbody");
+            const rows = Array.from(tbody.querySelectorAll(".group-row"));
+            const direction = sortDirections[colIndex] ? 1 : -1;
+            
+            rows.sort((a, b) => {
+                let aVal = a.cells[colIndex].innerText.toLowerCase().trim();
+                let bVal = b.cells[colIndex].innerText.toLowerCase().trim();
+
+                // Special handling for numeric columns (Members, Total Lag)
+                if (colIndex === 4 || colIndex === 5) {
+                    // Try to get numeric value from data-sort attribute if available
+                    const aSort = a.cells[colIndex].getAttribute('data-sort');
+                    const bSort = b.cells[colIndex].getAttribute('data-sort');
+                    
+                    aVal = parseFloat(aSort || aVal) || 0;
+                    bVal = parseFloat(bSort || bVal) || 0;
+                }
+
+                if (aVal < bVal) return -direction;
+                if (aVal > bVal) return direction;
+                return 0;
+            });
+
+            // Re-append rows in sorted order, ensuring each details row stays after its group row
+            rows.forEach(row => {
+                tbody.appendChild(row);
+                const groupID = row.cells[0].textContent.trim();
+                const detailsRow = document.getElementById('details-' + groupID);
+                if (detailsRow) {
+                    tbody.appendChild(detailsRow);
+                }
+            });
+
+            // Toggle direction for next click
+            sortDirections[colIndex] = !sortDirections[colIndex];
+
+            // Update UI Icons (Optional but nice)
+            const headers = table.querySelectorAll("th");
+            headers.forEach((th, idx) => {
+                const icon = th.querySelector(".sort-icon");
+                if (icon) {
+                    if (idx === colIndex) {
+                        icon.textContent = sortDirections[colIndex] ? "↑" : "↓";
+                    } else {
+                        icon.textContent = "↕";
+                    }
+                }
+            });
+        }
+
+        function filterGroups() {
+            const input = document.getElementById('groupSearch');
+            const filter = input.value.toLowerCase();
+            const rows = document.querySelectorAll('.group-row');
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const groupID = row.getAttribute('data-group');
+                const topics = row.getAttribute('data-topics');
+                const detailsRow = document.getElementById('details-' + row.cells[0].textContent.trim());
+
+                if (groupID.includes(filter) || topics.includes(filter)) {
+                    row.style.display = "";
+                    visibleCount++;
+                } else {
+                    row.style.display = "none";
+                    if (detailsRow) detailsRow.style.display = "none"; // Hide expanded details if group is filtered out
+                }
+            });
+
+            const stats = document.getElementById('searchStats');
+            stats.textContent = `Showing ${visibleCount} of ${rows.length}`;
+        }
+
+        // Initialize stats
+        document.addEventListener('DOMContentLoaded', () => {
+            const rows = document.querySelectorAll('.group-row');
+            document.getElementById('searchStats').textContent = `Showing ${rows.length} of ${rows.length}`;
+        });
+    </script>
+</body>
+</html>

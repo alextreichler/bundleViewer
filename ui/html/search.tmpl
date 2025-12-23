@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Global Search Results</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script src="/static/theme.js"></script>
+    <style>
+        .search-result {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: var(--header-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+        .search-category {
+            font-size: 0.85em;
+            text-transform: uppercase;
+            color: var(--text-color-light);
+            margin-bottom: 5px;
+        }
+        .search-title {
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .search-title a {
+            text-decoration: none;
+            color: var(--link-color);
+        }
+        .search-title a:hover {
+            text-decoration: underline;
+        }
+        .search-preview {
+            font-family: monospace;
+            font-size: 0.9em;
+            white-space: pre-wrap;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        mark {
+            background-color: yellow;
+            color: black;
+        }
+        [data-theme="dark"] mark, [data-theme="ultra-dark"] mark {
+            background-color: #b8860b;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+	
+    <h1>Global Search Results for "{{.Query}}"</h1>
+
+    <div style="margin-bottom: 20px;">
+        <form action="/search" method="GET" style="display: flex; gap: 10px; max-width: 600px;">
+            <input type="text" name="q" placeholder="Global Search..." value="{{.Query}}" style="flex-grow: 1; padding: 8px; font-size: 14px; border: 1px solid var(--border-color); border-radius: 4px; background-color: var(--bg-color); color: var(--text-color);">
+            <button type="submit" style="padding: 8px 16px; font-size: 14px; background-color: var(--link-color); color: var(--bg-color); border: none; border-radius: 4px; cursor: pointer;">Search</button>
+        </form>
+    </div>
+
+    {{if .Results}}
+        <p>Found {{len .Results}} results.</p>
+        {{range .Results}}
+        <div class="search-result">
+            <div class="search-category">{{.Category}}</div>
+            <div class="search-title"><a href="{{.Link}}">{{.Title}}</a></div>
+            {{if .Preview}}
+            <div class="search-preview">{{.Preview}}</div>
+            {{end}}
+        </div>
+        {{end}}
+    {{else}}
+        <p>No results found.</p>
+    {{end}}
+
+</body>
+</html>

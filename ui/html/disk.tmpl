@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Disk Overview</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script src="/static/theme.js"></script>
+</head>
+<body>
+	<div id="loading-overlay">
+		<div id="loading-box">
+			<h2>Loading...</h2>
+			<div id="progress-container">
+				<div id="progress-bar">0%</div>
+			</div>
+		</div>
+	</div>
+    {{template "nav" (dict "Active" "Disk" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+	<h1>Disk Overview</h1>
+	<h2>Node: {{.NodeHostname}}</h2>
+
+	<h2>Overall Disk Usage</h2>
+	<table>
+		<tbody>
+			<tr>
+				<th>Total Data Disk Space</th>
+				<td>{{.DataDiskStats.TotalBytes | formatBytes}}</td>
+			</tr>
+			<tr>
+				<th>Free Data Disk Space</th>
+				<td>{{.DataDiskStats.FreeBytes | formatBytes}}</td>
+			</tr>
+			<tr>
+				<th>Used Data Disk Space</th>
+				<td>{{ (sub .DataDiskStats.TotalBytes .DataDiskStats.FreeBytes) | formatBytes}}</td>
+			</tr>
+			<tr>
+				<th>Overall Free Space (from resource-usage.json)</th>
+				<td>{{ (mul .ResourceUsage.FreeSpaceMB 1048576.0) | formatBytesFloat}}</td>
+			</tr>
+		</tbody>
+	</table>
+
+	<h2>Disk Usage per Topic</h2>
+	<table>
+		<thead>
+			<tr>
+				<th>Topic Name</th>
+				<th>Total Size</th>
+			</tr>
+		</thead>
+		<tbody>
+			{{range .TopicsDiskInfo}}
+			<tr>
+				<td><a href="#" onclick="toggleVisibility('{{.Name}}-details'); return false;">{{.Name}}</a></td>
+				<td>{{.TotalSize | formatBytes}}</td>
+			</tr>
+			<tr id="{{.Name}}-details" style="display:none;">
+				<td colspan="2">
+					<table>
+						<thead>
+							<tr>
+								<th>Partition ID</th>
+								<th>Size</th>
+							</tr>
+						</thead>
+						<tbody>
+							{{range $partitionID, $size := .Partitions}}
+							<tr>
+								<td>{{$partitionID}}</td>
+								<td>{{$size | formatBytes}}</td>
+							</tr>
+							{{end}}
+						</tbody>
+					</table>
+				</td>
+			</tr>
+			{{end}}
+		</tbody>
+	</table>
+
+	<script src="/static/common.js"></script>
+	<script src="/static/progress.js"></script>
+</body>
+</html>

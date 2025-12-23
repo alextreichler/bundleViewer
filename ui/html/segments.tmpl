@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Log Segments</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "Segments" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    <h1>Log Segments Inspector</h1>
+    <p>Select a binary log segment (.log) to inspect its Record Batch headers.</p>
+
+    <div style="display: grid; grid-template-columns: 300px 1fr; gap: 20px;">
+        <div class="card" style="height: 80vh; overflow-y: auto;">
+            <h3>Available Segments</h3>
+            <ul style="list-style: none; padding: 0;">
+                {{range .Files}}
+                <li style="margin-bottom: 5px;">
+                    <button class="link-btn" 
+                            hx-get="/segments/view?file={{.}}" 
+                            hx-target="#segment-detail" 
+                            hx-indicator="#loading"
+                            style="text-align: left; width: 100%; border: 1px solid var(--border-color); background: none; color: var(--link-color); padding: 8px; cursor: pointer;">
+                        {{.}}
+                    </button>
+                </li>
+                {{else}}
+                <li>No .log files found in controller-logs/</li>
+                {{end}}
+            </ul>
+        </div>
+
+        <div class="card" style="height: 80vh; overflow-y: auto; padding: 20px;">
+            <div id="loading" class="htmx-indicator">Loading segment data...</div>
+            <div id="segment-detail">
+                <p>Select a file to view details.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

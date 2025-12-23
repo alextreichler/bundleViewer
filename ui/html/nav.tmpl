@@ -1,0 +1,73 @@
+{{define "nav"}}
+<nav>
+    <div class="nav-links">
+        {{if not .LogsOnly}}
+        <a href="/" class="{{if eq .Active "Home"}}active{{end}}">Home</a>
+        <a href="/partitions" class="{{if eq .Active "Partitions"}}active{{end}}">Partitions</a>
+        <a href="/disk" class="{{if eq .Active "Disk"}}active{{end}}">Disk</a>
+        <a href="/kafka" class="{{if eq .Active "Kafka"}}active{{end}}">Kafka</a>
+        <a href="/groups" class="{{if eq .Active "Groups"}}active{{end}}">Groups</a>
+        <a href="/k8s" class="{{if eq .Active "K8s"}}active{{end}}">K8s</a>
+        <span class="nav-sep"></span>
+        {{end}}
+
+        <a href="/logs" class="{{if eq .Active "Logs"}}active{{end}}">Logs</a>
+        {{if not .LogsOnly}}
+        <a href="/metrics" class="{{if eq .Active "Metrics"}}active{{end}}">Metrics</a>
+        <a href="/system" class="{{if eq .Active "System"}}active{{end}}">System</a>
+        <a href="/segments" class="{{if eq .Active "Segments"}}active{{end}}">Segments</a>
+        <span class="nav-sep"></span>
+        
+        <a href="/timeline" class="{{if eq .Active "Timeline"}}active{{end}}">Timeline</a>
+        <a href="/skew" class="{{if eq .Active "Skew"}}active{{end}}">Skew Analysis</a>
+        <a href="/diagnostics" class="{{if eq .Active "Diagnostics"}}active{{end}}">Diagnostics</a>
+        {{end}}
+    </div>
+
+    {{$activeSession := ""}}
+    {{if .Sessions}}
+        {{$activeSession = index .Sessions .ActivePath}}
+    {{end}}
+    {{if $activeSession}}
+    <div class="nav-info-bar">
+        <span>Viewing Bundle:</span>
+        <span class="nav-bundle-name">{{$activeSession.Name}}</span>
+    </div>
+    {{end}}
+
+    <div class="theme-switch-wrapper" style="display: flex; gap: 10px; align-items: center;">
+        {{if .Sessions}}
+        <div class="theme-selection-container">
+            <button class="bundle-select-btn">
+                {{if gt (len .Sessions) 1}}
+                    Switch Bundles
+                {{else}}
+                    Analyze new bundle
+                {{end}}
+            </button>
+            <div class="bundle-select-menu">
+                {{range $path, $session := .Sessions}}
+                <button class="bundle-select-option" onclick="window.location.href='/api/switch-bundle?path={{$path}}'">{{$session.Name}}</button>
+                {{end}}
+                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 4px 0;">
+                <button class="bundle-select-option" onclick="window.location.href='/setup'">+ Analyze New Bundle</button>
+            </div>
+        </div>
+        {{else}}
+        <a href="/setup" class="button" style="padding: 4px 12px; font-size: 0.75rem; background-color: var(--card-bg); color: var(--text-color); border: 1px solid var(--border-color);">Analyze New Bundle</a>
+        {{end}}
+
+        <div class="theme-selection-container">
+            <button class="theme-select-btn">Themes</button>
+            <div class="theme-select-menu">
+                <button class="theme-select-option" data-theme="light">Light</button>
+                <button class="theme-select-option" data-theme="dark">Dark</button>
+                <button class="theme-select-option" data-theme="ultra-dark">Ultra Dark</button>
+                <button class="theme-select-option" data-theme="retro">Retro</button>
+                <button class="theme-select-option" data-theme="compact">Compact</button>
+                <button class="theme-select-option" data-theme="powershell">Powershell</button>
+            </div>
+        </div>
+    </div>
+</nav>
+{{end}}

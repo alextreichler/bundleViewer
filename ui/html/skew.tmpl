@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Partition Skew Analysis</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/tables.js"></script>
+    <style>
+        .skew-card {
+            background-color: var(--header-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .skew-positive { color: #d32f2f; font-weight: bold; } /* Overloaded */
+        .skew-negative { color: #1976d2; font-weight: bold; } /* Underloaded */
+        .skew-normal { color: var(--text-color); }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-box {
+            background-color: var(--bg-color);
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--link-color);
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: var(--text-color-light);
+            margin-top: 5px;
+        }
+
+        .bar-container {
+            display: flex;
+            align-items: center;
+            height: 20px;
+            background-color: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            width: 100px;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background-color: var(--link-color);
+        }
+
+        .bar-fill.skewed {
+            background-color: #fbc02d;
+        }
+
+        .bar-fill.critically-skewed {
+            background-color: #d32f2f;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 10px;
+        }
+
+        .config-label {
+            font-weight: bold;
+            color: var(--text-color-light);
+        }
+    </style>
+</head>
+<body>
+	
+	</div>
+    {{template "nav" (dict "Active" "Skew" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+	<h1>Skew Analysis</h1>
+
+    <div class="skew-card">
+        <h3>Cluster Summary</h3>
+        <div class="stat-grid">
+            <div class="stat-box">
+                <div class="stat-value">{{.Analysis.TotalPartitions}}</div>
+                <div class="stat-label">Total Partitions</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{.Analysis.TotalNodes}}</div>
+                <div class="stat-label">Total Nodes</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{printf "%.1f" .Analysis.MeanPartitions}}</div>
+                <div class="stat-label">Mean Partitions/Node</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{printf "%.2f" .Analysis.StdDev}}</div>
+                <div class="stat-label">Standard Deviation</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="skew-card">
+        <h3>Node Balance</h3>
+        <p>Analyzing deviation from the mean partition count. >20% deviation is highlighted.</p>
+
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Node ID</th>
+                    <th>Partition Count</th>
+                    <th>Topic Count</th>
+                    <th>Deviation from Mean</th>
+                    <th>Skew %</th>
+                    <th>Status</th>
+                    <th>Balancing Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $i, $nodeSkew := .Analysis.NodeSkews}}
+                <tr>
+                    <td>{{$nodeSkew.NodeID}}</td>
+                    <td>{{$nodeSkew.PartitionCount}}</td>
+                    <td>{{$nodeSkew.TopicCount}}</td>
+                    <td>
+                        {{if gt $nodeSkew.Deviation 0.0}}+{{end}}{{printf "%.2f" $nodeSkew.Deviation}} σ
+                    </td>
+                    <td class="{{if gt $nodeSkew.SkewPercentage 20.0}}skew-positive{{else if lt $nodeSkew.SkewPercentage -20.0}}skew-negative{{else}}skew-normal{{end}}">
+                        {{if gt $nodeSkew.SkewPercentage 0.0}}+{{end}}{{printf "%.1f" $nodeSkew.SkewPercentage}}%
+                    </td>
+                    <td>
+                        {{if $nodeSkew.IsSkewed}}
+                            {{if gt $nodeSkew.SkewPercentage 0.0}}Overloaded{{else}}Underloaded{{end}}
+                        {{else}}
+                            Balanced
+                        {{end}}
+                    </td>
+                    <td>
+                        {{ with (index $.Analysis.Balancing.Nodes $i) }}
+                            {{printf "%.8f" .Score}}
+                        {{ end }}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+
+    {{if .Analysis.TopicSkews}}
+    <div class="skew-card">
+        <h3>Top Skewed Topics</h3>
+        <p>Topics with uneven replica distribution across the cluster.</p>
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Topic Name</th>
+                    <th>Total Replicas</th>
+                    <th>Max Skew %</th>
+                    <th>Node Distribution (Node: Count)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Analysis.TopicSkews}}
+                <tr>
+                    <td>{{.TopicName}}</td>
+                    <td>{{.PartitionCount}}</td>
+                    <td class="skew-positive">+{{printf "%.1f" .MaxSkew}}%</td>
+                    <td>
+                        {{range $nodeID, $count := .NodeDistribution}}
+                            {{if gt $count 0}}
+                                <span class="node-badge">
+                                    Node {{$nodeID}}: <b>{{$count}}</b>
+                                </span>
+                            {{end}}
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+
+    <div class="skew-card">
+        <h3>Partition Balancing Configuration</h3>
+        <div class="config-grid">
+            <div class="config-label">Topic Aware Balancing:</div>
+            <div>{{.Analysis.Balancing.Config.TopicAware}}</div>
+
+            <div class="config-label">Rack Awareness Enabled:</div>
+            <div>{{.Analysis.Balancing.Config.RackAwarenessEnabled}}</div>
+
+            <div class="config-label">Partitions Per Shard:</div>
+            <div>{{.Analysis.Balancing.Config.PartitionsPerShard}}</div>
+
+            <div class="config-label">Reserved Partitions (Shard 0):</div>
+            <div>{{.Analysis.Balancing.Config.PartitionsReserveShard0}}</div>
+        </div>
+        <p style="margin-top: 15px;">A lower balancing score is better. A move is only triggered if a destination node has a lower score than the source.</p>
+    </div>
+
+    <div class="skew-card">
+        <h3>Node Balancing Scores</h3>
+         <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Node ID</th>
+                    <th>CPU Cores</th>
+                    <th>Max Capacity</th>
+                    <th>Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Analysis.Balancing.Nodes}}
+                <tr>
+                    <td>{{.NodeID}}</td>
+                    <td>{{.CPU}}</td>
+                    <td>{{.MaxCapacity}}</td>
+                    <td>{{printf "%.8f" .Score}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="skew-card">
+        <h3>Disk Space Management Analysis</h3>
+        <p>This section explains how Redpanda manages disk space and when it triggers rebalancing based on disk usage.</p>
+
+        <h4>Configuration Settings</h4>
+        <div class="config-grid">
+            <div class="config-label">Space Management Enabled:</div>
+            <div>{{.Analysis.Balancing.DiskConfig.SpaceManagementEnabled}}</div>
+
+            <div class="config-label">Disk Reservation Percent:</div>
+            <div>{{.Analysis.Balancing.DiskConfig.DiskReservationPercent}}%</div>
+
+            <div class="config-label">Retention Local Target Capacity Percent:</div>
+            <div>{{.Analysis.Balancing.DiskConfig.RetentionLocalTargetCapacityPercent}}%</div>
+
+            <div class="config-label">Retention Local Target Capacity Bytes:</div>
+            <div>{{if gt .Analysis.Balancing.DiskConfig.RetentionLocalTargetCapacityBytes 0}}{{.Analysis.Balancing.DiskConfig.RetentionLocalTargetCapacityBytes | formatBytes}}{{- else}}Disabled{{- end}}</div>
+
+            <div class="config-label">Partition Autobalancing Max Disk Usage Percent (Soft Max):</div>
+            <div>{{.Analysis.Balancing.DiskConfig.PartitionAutobalancingMaxDiskUsagePercent}}%</div>
+
+            <div class="config-label">Storage Space Alert Free Threshold Percent (Hard Max):</div>
+            <div>{{.Analysis.Balancing.DiskConfig.StorageSpaceAlertFreeThresholdPercent}}%</div>
+        </div>
+
+        <p style="margin-top: 15px;">
+            Rebalancing also considers a 'hard max' disk usage, defined by <code>storage_space_alert_free_threshold_percent</code>. The balancer will not move partitions to a node if its disk usage would exceed <code>100% - {{.Analysis.Balancing.DiskConfig.StorageSpaceAlertFreeThresholdPercent}}%</code> of the total disk.
+        </p>
+    </div>
+</body>
+</html>

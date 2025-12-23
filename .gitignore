@@ -1,0 +1,6 @@
+dist/
+bundleViewer
+bundle.db
+bin/
+.DS_Store
+*.log
