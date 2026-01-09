@@ -22,3 +22,11 @@ type HealthOverview struct {
 	NodesDown            []int `json:"nodes_down"`
 	AllNodes             []int `json:"all_nodes"`
 }
+
+type PartitionBalancerStatus struct {
+	Status                                 string                 `json:"status"`
+	Violations                             map[string]interface{} `json:"violations"`
+	SecondsSinceLastTick                   int                    `json:"seconds_since_last_tick"`
+	PartitionsPendingForceRecoveryCount    int                    `json:"partitions_pending_force_recovery_count"`
+	PartitionsPendingForceRecoverySample   interface{}            `json:"partitions_pending_force_recovery_sample"`
+}

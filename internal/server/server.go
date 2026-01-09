@@ -78,6 +78,7 @@ type Server struct {
 	diagnosticsTemplate *template.Template
 	segmentsTemplate    *template.Template
 	segmentViewTemplate *template.Template
+	cpuProfilesTemplate *template.Template
 	logsOnly            bool
 }
 
@@ -89,7 +90,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool) (http.Handler, error) { // Accept both
+func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker) (http.Handler, error) { // Accept both
 	funcMap := template.FuncMap{
 		"renderData": func(key string, data interface{}) template.HTML {
 			return renderDataLazy(key, "", data, 0, 0)
@@ -275,10 +276,15 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		return nil, fmt.Errorf("failed to parse segment_view template: %w", err)
 	}
 
+	cpuProfilesTemplate, err := template.New("cpu_profiles.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/cpu_profiles.tmpl", "html/nav.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse cpu_profiles template: %w", err)
+	}
+
 	server := &Server{
 		sessions:            make(map[string]*BundleSession),
 		activePath:          bundlePath,
-		progress:            models.NewProgressTracker(21),
+		progress:            progress,
 		bundlePath:          bundlePath,
 		cachedData:          cachedData,
 		store:               s,
@@ -302,7 +308,12 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		diagnosticsTemplate: diagnosticsTemplate,
 		segmentsTemplate:    segmentsTemplate,
 		segmentViewTemplate: segmentViewTemplate,
+		cpuProfilesTemplate: cpuProfilesTemplate,
 		logsOnly:            logsOnly,
+	}
+
+	if server.progress == nil {
+		server.progress = models.NewProgressTracker(22)
 	}
 
 	if bundlePath != "" {
@@ -354,6 +365,11 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/diagnostics", server.diagnosticsHandler)
 	mux.HandleFunc("/segments", server.segmentsHandler)
 	mux.HandleFunc("/segments/view", server.segmentViewHandler)
+	mux.HandleFunc("/cpu", server.cpuProfilesHandler)
+	mux.HandleFunc("/api/cpu/profiles", server.apiCpuProfilesHandler)
+	mux.HandleFunc("/api/cpu/details", server.apiCpuProfileDetailsHandler)
+	mux.HandleFunc("/api/cpu/binary-status", server.apiCpuBinaryStatusHandler)
+	mux.HandleFunc("/api/cpu/download", server.apiCpuDownloadHandler)
 
 	// Wrap the mux with middlewares
 	// Order: Security -> Mux

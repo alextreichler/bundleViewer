@@ -82,6 +82,9 @@ type UnameInfo struct {
 	KernelVersion string
 	Machine       string
 	OperatingSystem string
+	Distro          string
+	IsContainer     bool
+	CloudProvider   string
 }
 
 // DMIInfo represents hardware information from dmidecode

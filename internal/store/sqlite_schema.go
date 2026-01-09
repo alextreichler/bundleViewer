@@ -87,3 +87,16 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT
 );
 `
+
+const CpuProfileSchema = `
+CREATE TABLE IF NOT EXISTS cpu_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node TEXT NOT NULL,
+    shard_id INTEGER NOT NULL,
+    scheduling_group TEXT NOT NULL,
+    user_backtrace TEXT NOT NULL,
+    occurrences INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cpu_profiles_node_shard ON cpu_profiles(node, shard_id);
+CREATE INDEX IF NOT EXISTS idx_cpu_profiles_group ON cpu_profiles(scheduling_group);
+`

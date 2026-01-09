@@ -366,6 +366,17 @@ END;`,
 		currentVersion = 6
 	}
 
+	// Version 6 -> 7: Add CPU Profiles
+	if currentVersion < 7 {
+		if _, err := tx.Exec(CpuProfileSchema); err != nil {
+			return fmt.Errorf("failed to create cpu_profiles table: %w", err)
+		}
+		if _, err := tx.Exec("INSERT INTO schema_version (version) VALUES (7)"); err != nil {
+			return fmt.Errorf("failed to update schema version to 7: %w", err)
+		}
+		currentVersion = 7
+	}
+
 	return tx.Commit()
 }
 
@@ -1176,5 +1187,126 @@ func (s *SQLiteStore) GetDistinctMetricNames() ([]string, error) {
 		}
 		names = append(names, name)
 	}
-	return names, rows.Err()
-}
+	        return names, rows.Err()
+	}
+	
+	func (s *SQLiteStore) BulkInsertCpuProfiles(profiles []models.CpuProfileEntry) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+	
+		stmt, err := tx.Prepare("INSERT INTO cpu_profiles (node, shard_id, scheduling_group, user_backtrace, occurrences) VALUES (?, ?, ?, ?, ?)")
+		if err != nil {
+			return fmt.Errorf("failed to prepare statement: %w", err)
+		}
+		defer func() { _ = stmt.Close() }()
+	
+		for _, p := range profiles {
+			if _, err := stmt.Exec(p.Node, p.ShardID, p.SchedulingGroup, p.UserBacktrace, p.Occurrences); err != nil {
+				return fmt.Errorf("failed to insert cpu profile: %w", err)
+			}
+		}
+	
+		return tx.Commit()
+	}
+	
+	func (s *SQLiteStore) GetCpuProfiles() ([]models.CpuProfileAggregate, error) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+	
+		// Check if table exists (in case migration failed or running on old DB without clean)
+		var exists int
+		err := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='cpu_profiles'").Scan(&exists)
+		if err != nil || exists == 0 {
+			return []models.CpuProfileAggregate{}, nil
+		}
+	
+		query := `
+			SELECT node, shard_id, scheduling_group, SUM(occurrences) as total
+			FROM cpu_profiles
+			GROUP BY node, shard_id, scheduling_group
+			ORDER BY node, shard_id, total DESC
+		`
+	
+		rows, err := s.db.Query(query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query cpu profiles: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+	
+		var rawResults []models.CpuProfileAggregate
+		
+		type key struct {
+			node  string
+			shard int
+		}
+		shardTotals := make(map[key]int)
+	
+		for rows.Next() {
+			var r models.CpuProfileAggregate
+			if err := rows.Scan(&r.Node, &r.ShardID, &r.SchedulingGroup, &r.TotalSamples); err != nil {
+				return nil, err
+			}
+			rawResults = append(rawResults, r)
+			k := key{r.Node, r.ShardID}
+			shardTotals[k] += r.TotalSamples
+		}
+	
+		for i := range rawResults {
+			k := key{rawResults[i].Node, rawResults[i].ShardID}
+			if total := shardTotals[k]; total > 0 {
+				rawResults[i].Percentage = (float64(rawResults[i].TotalSamples) / float64(total)) * 100
+			}
+		}
+	
+			return rawResults, nil
+		}
+		
+		func (s *SQLiteStore) GetCpuProfileDetails(node string, shardID int, group string) ([]models.CpuProfileDetail, error) {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+		
+			// 1. Get total samples for this group/shard to calculate percentage
+			var total int
+			err := s.db.QueryRow("SELECT SUM(occurrences) FROM cpu_profiles WHERE node = ? AND shard_id = ? AND scheduling_group = ?", node, shardID, group).Scan(&total)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get total samples: %w", err)
+			}
+		
+			if total == 0 {
+				return []models.CpuProfileDetail{}, nil
+			}
+		
+			// 2. Get top backtraces
+			query := `
+				SELECT user_backtrace, SUM(occurrences) as occ
+				FROM cpu_profiles
+				WHERE node = ? AND shard_id = ? AND scheduling_group = ?
+				GROUP BY user_backtrace
+				ORDER BY occ DESC
+				LIMIT 50
+			`
+			rows, err := s.db.Query(query, node, shardID, group)
+			if err != nil {
+				return nil, fmt.Errorf("failed to query profile details: %w", err)
+			}
+			defer func() { _ = rows.Close() }()
+		
+			var details []models.CpuProfileDetail
+			for rows.Next() {
+				var d models.CpuProfileDetail
+				if err := rows.Scan(&d.UserBacktrace, &d.Occurrences); err != nil {
+					return nil, err
+				}
+				d.Percentage = (float64(d.Occurrences) / float64(total)) * 100
+				details = append(details, d)
+			}
+		
+			return details, nil
+		}
+		

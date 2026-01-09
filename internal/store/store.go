@@ -27,6 +27,10 @@ type Store interface {
 	BulkInsertMetrics(metrics []*models.PrometheusMetric, timestamp time.Time) error
 	GetMetrics(name string, labels map[string]string, startTime, endTime time.Time, limit, offset int) ([]*models.PrometheusMetric, error)
 
+	BulkInsertCpuProfiles(profiles []models.CpuProfileEntry) error
+	GetCpuProfiles() ([]models.CpuProfileAggregate, error)
+	GetCpuProfileDetails(node string, shardID int, group string) ([]models.CpuProfileDetail, error)
+
 	Optimize() error
 	Close() error
 }

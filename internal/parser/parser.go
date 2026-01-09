@@ -692,6 +692,23 @@ func ParseHealthOverview(bundlePath string) (models.HealthOverview, error) {
 	return healthOverview, nil
 }
 
+// ParsePartitionBalancerStatus reads and parses the partition_balancer_status.json file.
+func ParsePartitionBalancerStatus(bundlePath string) (models.PartitionBalancerStatus, error) {
+	filePath := filepath.Join(bundlePath, "admin", "partition_balancer_status.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return models.PartitionBalancerStatus{}, err
+	}
+
+	var status models.PartitionBalancerStatus
+	err = json.Unmarshal(data, &status)
+	if err != nil {
+		slog.Error("Error unmarshaling partition_balancer_status.json", "error", err)
+		return models.PartitionBalancerStatus{}, err
+	}
+	return status, nil
+}
+
 // ParsePartitionLeaders reads and parses a partition_leader_table_...json file.
 func ParsePartitionLeaders(bundlePath string, logsOnly bool) ([]models.PartitionLeader, error) {
 	pattern := filepath.Join(bundlePath, "admin", "partition_leader_table_*.json")
@@ -861,10 +878,68 @@ func ParseUnameInfo(bundlePath string) (models.UnameInfo, error) {
 			KernelRelease: fields[2],
 		}
 		
+		// Set a default OS if it's Linux
+		if info.KernelName == "Linux" {
+			info.OperatingSystem = "Linux"
+		}
+
+		// Infer Distribution from KernelRelease pattern
+		release := info.KernelRelease
+		if strings.Contains(release, ".el9") {
+			info.Distro = "RHEL/CentOS 9"
+		} else if strings.Contains(release, ".el8") {
+			info.Distro = "RHEL/CentOS 8"
+		} else if strings.Contains(release, ".el7") {
+			info.Distro = "RHEL/CentOS 7"
+		} else if strings.Contains(release, "Ubuntu") || strings.Contains(info.KernelVersion, "Ubuntu") {
+			info.Distro = "Ubuntu"
+		} else if strings.Contains(release, "Debian") || strings.Contains(info.KernelVersion, "Debian") {
+			info.Distro = "Debian"
+		} else if strings.Contains(release, "amzn") {
+			if strings.Contains(release, "amzn2") {
+				info.Distro = "Amazon Linux 2"
+			} else if strings.Contains(release, "amzn2023") {
+				info.Distro = "Amazon Linux 2023"
+			} else {
+				info.Distro = "Amazon Linux"
+			}
+		} else if strings.Contains(release, "fc") {
+			info.Distro = "Fedora"
+		} else if strings.Contains(release, "arch") {
+			info.Distro = "Arch Linux"
+		} else if strings.Contains(release, "gentoo") {
+			info.Distro = "Gentoo"
+		} else if strings.Contains(release, "alpine") {
+			info.Distro = "Alpine Linux"
+		} else if strings.Contains(release, "rocky") {
+			info.Distro = "Rocky Linux"
+		} else if strings.Contains(release, "alma") {
+			info.Distro = "AlmaLinux"
+		}
+		
+		// Detect if running in a container/K8s
+		// Heuristics:
+		// 1. Hostname matches standard K8s pod pattern (e.g. name-random-hash)
+		// 2. Hostname matches statefulset pattern (e.g. name-0)
+		hostname := info.Hostname
+		podPattern := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*-[0-9]+$`) // statefulset
+		if podPattern.MatchString(hostname) || strings.HasPrefix(hostname, "redpanda-") {
+			info.IsContainer = true
+		}
+		
+		// Detect Cloud Provider
+		if strings.Contains(hostname, ".aws") || strings.Contains(hostname, "compute.internal") {
+			info.CloudProvider = "AWS"
+		} else if strings.Contains(hostname, ".google") || strings.Contains(hostname, "gce") {
+			info.CloudProvider = "GCP"
+		} else if strings.Contains(hostname, ".azure") {
+			info.CloudProvider = "Azure"
+		}
+
 		// Try to find architecture (usually last or second to last, e.g. x86_64)
 		// And OS (GNU/Linux)
 		for i, field := range fields {
-			if field == "x86_64" || field == "aarch64" || field == "arm64" {
+			if field == "x86_64" || field == "aarch64" || field == "arm64" || field == "x86" || field == "i386" || field == "i686" {
 				info.Machine = field
 			}
 			if field == "GNU/Linux" {
@@ -876,12 +951,21 @@ func ParseUnameInfo(bundlePath string) (models.UnameInfo, error) {
 				// This is heuristic as uname output varies by OS
 				end := len(fields)
 				for j := i; j < len(fields); j++ {
-					if fields[j] == "x86_64" || fields[j] == "aarch64" || fields[j] == "arm64" {
+					if fields[j] == "x86_64" || fields[j] == "aarch64" || fields[j] == "arm64" || fields[j] == "GNU/Linux" {
 						end = j
 						break
 					}
 				}
 				info.KernelVersion = strings.Join(fields[i:end], " ")
+				
+				// Check KernelVersion for distro hints if release didn't have any
+				if info.Distro == "" {
+					if strings.Contains(info.KernelVersion, "Ubuntu") {
+						info.Distro = "Ubuntu"
+					} else if strings.Contains(info.KernelVersion, "Debian") {
+						info.Distro = "Debian"
+					}
+				}
 			}
 		}
 		
@@ -921,6 +1005,19 @@ func ParseClusterConfig(bundlePath string) ([]models.ClusterConfigEntry, error) 
 // ParseK8sResources reads and parses all supported Kubernetes JSON files in the k8s directory.
 func ParseK8sResources(bundlePath string, logsOnly bool, s store.Store) (models.K8sStore, error) {
 	k8sDir := filepath.Join(bundlePath, "k8s")
+
+	// Fallback: Check if k8s dir exists in bundlePath, if not check parent
+	if _, err := os.Stat(k8sDir); os.IsNotExist(err) {
+		// Try parent directory (common when bundle is extracted flat)
+		parentDir := filepath.Join(bundlePath, "..", "k8s")
+		if _, err := os.Stat(parentDir); err == nil {
+			if !logsOnly {
+				slog.Info("K8s directory not found in bundle, using sibling directory", "path", parentDir)
+			}
+			k8sDir = parentDir
+		}
+	}
+
 	k8sStore := models.K8sStore{}
 	var wg sync.WaitGroup
 
