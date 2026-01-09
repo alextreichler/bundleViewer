@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>CPU Profiles</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme.js"></script>
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/chart.js"></script>
+    <style>
+        .chart-container {
+            position: relative; 
+            height: 500px; 
+            width: 100%; 
+            margin-top: 20px;
+        }
+        
+        .status-box {
+            margin-top: 10px; 
+            padding: 15px; 
+            background: var(--header-bg-color); 
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+        }
+
+        .status-success {
+            color: var(--primary-color);
+            font-weight: bold;
+        }
+
+        .status-warning {
+            color: var(--text-color); /* Use standard text color, rely on icon */
+            font-weight: bold;
+        }
+
+        .toast-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 15px 30px;
+            border-radius: var(--radius);
+            z-index: 10000;
+            box-shadow: var(--shadow-lg);
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            font-weight: bold;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    {{template "nav" (dict "Active" "CPU Profiles" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    <h1>CPU Profiles (Internal Profiler)</h1>
+
+    <div class="card">
+        <div style="margin-bottom: 20px;">
+            <label for="node-selector"><strong>Select Node:</strong></label>
+            <select id="node-selector" onchange="renderChart()">
+                <option value="">Loading nodes...</option>
+            </select>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="cpuChart"></canvas>
+        </div>
+        <div style="margin-top: 10px; font-size: 0.9em; color: var(--text-color-muted); text-align: center;">
+            ℹ️ Click on any bar segment to see detailed stack traces for that group on that shard.
+        </div>
+    </div>
+
+    <div id="drill-down-container" class="card" style="display: none;">
+        <h3 id="drill-down-title">Drill Down Details</h3>
+        <p style="color: var(--text-color-muted); margin-bottom: 10px;">
+            Showing top stack traces. Note: Redpanda profiles may contain raw memory addresses if symbols are not resolved.
+        </p>
+
+        <div style="background-color: var(--bg-color); border: 1px solid var(--border-color); padding: 15px; margin-bottom: 20px; border-radius: 4px; font-size: 0.9em;">
+            <strong>Why do I see Hex Addresses (e.g., 0xb3e7312)?</strong>
+            <p style="margin-top: 5px; margin-bottom: 10px;">
+                These are raw instruction pointers. To verify exactly which function is running, you need to map these addresses against the 
+                <strong>Redpanda Binary</strong> symbol table.
+            </p>
+            
+            <strong>How to Decode Manually:</strong>
+            <div id="binary-status-container" class="status-box">
+                Checking binary availability...
+            </div>
+
+            <div id="tool-instructions" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                <strong>Required Tool:</strong>
+                <p style="margin-top: 5px; margin-bottom: 5px;">
+                    You need <code>addr2line</code> installed on your machine.
+                </p>
+                <ul style="margin-top: 5px; padding-left: 20px; color: var(--text-color-muted);">
+                    <li id="mac-hint" style="display:none;">
+                        <strong>macOS:</strong> Install via Homebrew: <code>brew install llvm</code>. <br>
+                        Then use: <strong>llvm-addr2line</strong>. <br>
+                        <em style="font-size: 0.9em; color: var(--text-color-warning);">
+                            If "command not found", use full path: <code>$(brew --prefix llvm)/bin/llvm-addr2line</code>
+                        </em>
+                    </li>
+                    <li id="linux-hint" style="display:none;">
+                        <strong>Linux:</strong> Usually installed by default (binutils). Command: <strong>addr2line</strong>.
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-color); text-align: left;">
+                        <th style="padding: 8px;">%</th>
+                        <th style="padding: 8px;">Samples</th>
+                        <th style="padding: 8px;">Backtrace (Symbols / Addresses)</th>
+                    </tr>
+                </thead>
+                <tbody id="drill-down-body">
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Understanding Scheduling Groups</h3>
+        <p>Redpanda uses a thread-per-core architecture with a user-space scheduler. CPU time is attributed to different "Scheduling Groups" based on the task being performed.</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+            <thead>
+                <tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
+                    <th style="padding: 10px; width: 150px;">Group</th>
+                    <th style="padding: 10px;">Description & Common Causes for High Usage</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">main</td>
+                    <td style="padding: 10px;">
+                        The default group for general system tasks. Includes RPC (network) connection management, I/O callbacks, and timers. 
+                        <br><em style="color: var(--text-color-muted);">High usage often indicates high connection churn (TLS handshakes), high network interrupt processing, or internal background tasks.</em>
+                    </td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">kafka</td>
+                    <td style="padding: 10px;">
+                        Handles the Kafka protocol layer: parsing Produce/Fetch requests and formatting responses.
+                        <br><em style="color: var(--text-color-muted);">High usage is normal during high client traffic loads.</em>
+                    </td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">raft</td>
+                    <td style="padding: 10px;">
+                        Manages consensus, replication, and writing to the Write-Ahead Log (WAL).
+                        <br><em style="color: var(--text-color-muted);">High usage is expected during heavy write loads or cluster recovery.</em>
+                    </td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">fetch</td>
+                    <td style="padding: 10px;">
+                        Dedicated to reading data for consumers and for replication to follower nodes.
+                        <br><em style="color: var(--text-color-muted);">Separated to prevent heavy reads from starving critical write operations.</em>
+                    </td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">admin</td>
+                    <td style="padding: 10px;">
+                        Handles Admin API requests (port 9644), including metrics and config changes.
+                        <br><em style="color: var(--text-color-muted);">High usage is rare but can be caused by aggressive metrics scraping or "metrics explosion" (too many unique labels).</em>
+                    </td>
+                </tr>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 10px; font-weight: bold;">storage / compaction</td>
+                    <td style="padding: 10px;">
+                        Manages local disk operations: closing segments, enforcing retention, and compacting logs.
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding: 10px; font-weight: bold;">cloud_storage</td>
+                    <td style="padding: 10px;">
+                        Handles uploading and downloading data to object storage (S3, GCS, ABS) if Tiered Storage is enabled.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        let rawData = [];
+        let chartInstance = null;
+        let binaryPath = './redpanda'; // Default relative path
+        let binaryExists = false;
+        let addr2lineCmd = 'addr2line'; // Default
+
+        const groupColors = {
+            'main': '#FF6384',          // Red-ish
+            'kafka': '#36A2EB',         // Blue
+            'raft': '#FFCE56',          // Yellow
+            'fetch': '#4BC0C0',         // Teal
+            'admin': '#9966FF',         // Purple
+            'storage': '#FF9F40',       // Orange
+            'compaction': '#71B37C',    // Green
+            'cloud_storage': '#A0CFEC', // Light Blue
+            'archival': '#F660AB'       // Pink
+        };
+
+        const fallbackPalette = [
+            '#E7E9ED', '#2554C7', '#E55451'
+        ];
+
+        function getGroupColor(group, index) {
+            if (groupColors[group]) {
+                return groupColors[group];
+            }
+            return fallbackPalette[index % fallbackPalette.length];
+        }
+
+        async function loadData() {
+            const selector = document.getElementById('node-selector');
+            try {
+                if (selector) selector.innerHTML = '<option>Detecting OS...</option>';
+                detectOS();
+                
+                if (selector) selector.innerHTML = '<option>Fetching data...</option>';
+                const response = await fetch('/api/cpu/profiles');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                if (selector) selector.innerHTML = '<option>Parsing data...</option>';
+                rawData = await response.json();
+                
+                if (selector) selector.innerHTML = '<option>Rendering...</option>';
+                populateNodeSelector();
+                checkBinaryStatus();
+            } catch (error) {
+                console.error('Error fetching CPU profiles:', error);
+                if (selector) {
+                    selector.innerHTML = `<option>Error: ${error.message}</option>`;
+                    selector.disabled = true;
+                }
+            }
+        }
+
+        function detectOS() {
+            const platform = navigator.platform.toLowerCase();
+            if (platform.includes('mac')) {
+                // Homebrew llvm is keg-only, so use the dynamic path command
+                // llvm-addr2line is more robust for DWARF errors than gaddr2line
+                addr2lineCmd = '$(brew --prefix llvm)/bin/llvm-addr2line';
+                document.getElementById('mac-hint').style.display = 'list-item';
+            } else {
+                // Default to linux/standard
+                document.getElementById('linux-hint').style.display = 'list-item';
+            }
+        }
+
+        async function checkBinaryStatus() {
+            try {
+                const res = await fetch('/api/cpu/binary-status');
+                const data = await res.json();
+                binaryExists = data.exists;
+                if (binaryExists) {
+                    binaryPath = data.path;
+                    updateBinaryStatusUI(true, data.version);
+                } else {
+                    updateBinaryStatusUI(false, data.version);
+                }
+            } catch (e) {
+                console.error("Failed to check binary status", e);
+            }
+        }
+
+        function updateBinaryStatusUI(exists, version) {
+            const container = document.getElementById('binary-status-container');
+            if (!container) return;
+
+            if (exists) {
+                // If version string is " (Downloaded)", handle cleanly
+                const verStr = version.includes("Downloaded") ? "" : `v${version}`;
+                const extra = version.includes("Downloaded") ? " (Just Downloaded!)" : "";
+                
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.2em;">✅</span>
+                        <div>
+                            <div class="status-success">Binary ${verStr} Available ${extra}</div>
+                            <div style="font-size: 0.8em; color: var(--text-color-muted); word-break: break-all;">${binaryPath}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <span style="font-size: 1.2em;">⚠️</span>
+                            <span class="status-warning">Binary v${version} Missing</span>
+                            <div style="font-size: 0.8em; color: var(--text-color-muted);">Required to decode stack traces.</div>
+                        </div>
+                        <div>
+                            <button onclick="downloadBinary()" id="download-btn" style="padding: 6px 12px; cursor: pointer; background: var(--link-color); color: var(--bg-color); border: none; border-radius: 4px; font-weight: bold;">Download Binary (~150MB)</button>
+                        </div>
+                    </div>
+                    <div id="download-status" style="margin-top: 5px; font-style: italic; color: var(--link-color);"></div>
+                `;
+            }
+        }
+
+        async function downloadBinary() {
+            const btn = document.getElementById('download-btn');
+            const status = document.getElementById('download-status');
+            
+            if(!confirm("This will download the Redpanda binary (~150MB) from the official S3 bucket to the viewer's data directory.\n\nThe binary will be automatically deleted when you stop this program.\n\nContinue?")) return;
+
+            btn.disabled = true;
+            btn.style.opacity = "0.7";
+            btn.innerText = "Downloading...";
+            status.innerText = "Downloading... please wait (this depends on your internet speed)...";
+
+            try {
+                const res = await fetch('/api/cpu/download', { method: 'POST' });
+                if (!res.ok) throw new Error("Download failed");
+                const data = await res.json();
+                
+                status.innerText = "Download complete!";
+                binaryPath = data.path;
+                binaryExists = true;
+                
+                // Refresh details view if open to update copy commands
+                const drillDownDetails = document.getElementById('drill-down-body');
+                if (drillDownDetails) {
+                    // Update the status UI to show success
+                    updateBinaryStatusUI(true, " (Downloaded)");
+                }
+            } catch (e) {
+                status.innerText = "Error: " + e.message;
+                status.style.color = "var(--error-color)"; 
+                status.style.color = "#ff4444"; 
+                btn.disabled = false;
+                btn.style.opacity = "1";
+                btn.innerText = "Download Binary (~150MB)";
+            }
+        }
+
+        function populateNodeSelector() {
+            const selector = document.getElementById('node-selector');
+            selector.innerHTML = '';
+            
+            // Extract unique nodes
+            const nodes = [...new Set(rawData.map(item => item.node))].sort();
+            
+            if (nodes.length === 0) {
+                const option = document.createElement('option');
+                option.text = "No CPU profile data found";
+                selector.add(option);
+                selector.disabled = true;
+                return;
+            }
+
+            nodes.forEach(node => {
+                const option = document.createElement('option');
+                option.value = node;
+                option.text = node;
+                selector.add(option);
+            });
+
+            // Select first node by default and render
+            renderChart();
+        }
+
+        function renderChart() {
+            const selectedNode = document.getElementById('node-selector').value;
+            if (!selectedNode) return;
+
+            const nodeData = rawData.filter(item => item.node === selectedNode);
+            
+            // Group by Shard and Scheduling Group
+            const shards = {};
+            const groups = new Set();
+
+            nodeData.forEach(item => {
+                if (!shards[item.shard_id]) {
+                    shards[item.shard_id] = {};
+                }
+                if (!shards[item.shard_id][item.scheduling_group]) {
+                    shards[item.shard_id][item.scheduling_group] = 0;
+                }
+                shards[item.shard_id][item.scheduling_group] += item.total_samples;
+                groups.add(item.scheduling_group);
+            });
+
+            const sortedShards = Object.keys(shards).sort((a, b) => parseInt(a) - parseInt(b));
+            const sortedGroups = [...groups].sort();
+
+            const datasets = sortedGroups.map((group, index) => {
+                const data = sortedShards.map(shardId => {
+                    const val = shards[shardId][group] || 0;
+                    let totalShardSamples = 0;
+                    Object.values(shards[shardId]).forEach(v => totalShardSamples += v);
+                    return (val / totalShardSamples) * 100;
+                });
+
+                return {
+                    label: group,
+                    data: data,
+                    backgroundColor: getGroupColor(group, index),
+                };
+            });
+
+            const ctx = document.getElementById('cpuChart').getContext('2d');
+
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sortedShards.map(s => `Shard ${s}`),
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: (e) => {
+                        const points = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+                        if (points.length) {
+                            const firstPoint = points[0];
+                            const groupIndex = firstPoint.datasetIndex;
+                            const shardIndex = firstPoint.index;
+                            
+                            const groupName = chartInstance.data.datasets[groupIndex].label;
+                            const shardLabel = chartInstance.data.labels[shardIndex];
+                            const shardID = shardLabel.replace('Shard ', '');
+                            
+                            loadDetails(selectedNode, shardID, groupName);
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                            title: { display: true, text: 'Shards' }
+                        },
+                        y: {
+                            stacked: true,
+                            title: { display: true, text: 'CPU Usage (%)' },
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.raw.toFixed(2)}%`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function loadDetails(node, shard, group) {
+            const container = document.getElementById('drill-down-container');
+            const title = document.getElementById('drill-down-title');
+            const tbody = document.getElementById('drill-down-body');
+
+            title.innerText = `Drill Down: ${group} (Shard ${shard})`;
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 20px;">Loading...</td></tr>';
+            container.style.display = 'block';
+            
+            // Scroll to details
+            container.scrollIntoView({ behavior: 'smooth' });
+
+            try {
+                const res = await fetch(`/api/cpu/details?node=${encodeURIComponent(node)}&shard=${shard}&group=${encodeURIComponent(group)}`);
+                const data = await res.json();
+
+                tbody.innerHTML = '';
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 20px;">No details found.</td></tr>';
+                    return;
+                }
+
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.style.borderBottom = '1px solid var(--border-color)';
+                    
+                    const backtraceHtml = `<code style="display: block; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto; font-size: 0.85em;">${item.user_backtrace}</code>`;
+
+                    const addresses = item.user_backtrace.split(' ').filter(p => p.startsWith('0x')).join(' ');
+                    
+                    const copyButton = `<button onclick="copyCommand('${addresses}')" style="margin-top: 5px; font-size: 0.75rem; padding: 2px 6px; cursor: pointer;">Copy Command</button>`;
+
+                    row.innerHTML = `
+                        <td style="padding: 8px; vertical-align: top;">${item.percentage.toFixed(2)}%</td>
+                        <td style="padding: 8px; vertical-align: top;">${item.occurrences}</td>
+                        <td style="padding: 8px; vertical-align: top;">
+                            ${backtraceHtml}
+                            ${copyButton}
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+            } catch (err) {
+                console.error("Failed to load details", err);
+                tbody.innerHTML = `<tr><td colspan="3" style="color: red; text-align: center; padding: 20px;">Error loading details: ${err.message}</td></tr>`;
+            }
+        }
+
+        function copyCommand(addresses) {
+            const cmd = `${addr2lineCmd} -e "${binaryPath}" -f -C -i ${addresses}`;
+            navigator.clipboard.writeText(cmd).then(() => {
+                showToast("Command copied to clipboard!");
+            });
+        }
+
+        function showToast(message) {
+            let toast = document.getElementById('toast-notification');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'toast-notification';
+                toast.className = 'toast-popup'; // Use the CSS class
+                document.body.appendChild(toast);
+            }
+            toast.innerText = message;
+            toast.style.opacity = '1';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 2000);
+        }
+
+        // Init logic
+        console.log("CPU Profiles script initialized");
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(loadData, 1);
+        } else {
+            document.addEventListener('DOMContentLoaded', loadData);
+        }
+    </script>
+</body>
+</html>

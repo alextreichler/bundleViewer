@@ -14,6 +14,7 @@
         <a href="/logs" class="{{if eq .Active "Logs"}}active{{end}}">Logs</a>
         {{if not .LogsOnly}}
         <a href="/metrics" class="{{if eq .Active "Metrics"}}active{{end}}">Metrics</a>
+        <a href="/cpu" class="{{if eq .Active "CPU Profiles"}}active{{end}}">CPU Profiles</a>
         <a href="/system" class="{{if eq .Active "System"}}active{{end}}">System</a>
         <a href="/segments" class="{{if eq .Active "Segments"}}active{{end}}">Segments</a>
         <span class="nav-sep"></span>

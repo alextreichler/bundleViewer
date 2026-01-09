@@ -29,26 +29,92 @@ function toggleVisibility(id, linkElement) {
     }
 }
 
-// Back to top button logic
+// Deep Linking Logic
 document.addEventListener("DOMContentLoaded", function() {
-    var mybutton = document.getElementById("back-to-top");
-    if (mybutton) {
-        window.onscroll = function() {scrollFunction()};
-        mybutton.addEventListener("click", function() {
-            document.body.scrollTop = 0; // For Safari
-            document.documentElement.scrollTop = 0; // For Chrome, Firefox, IE and Opera
-        });
-    }
-
-    function scrollFunction() {
-        if (!mybutton) return;
-        if (document.body.scrollTop > 20 || document.documentElement.scrollTop > 20) {
-            mybutton.style.display = "block";
-        } else {
-            mybutton.style.display = "none";
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileName = urlParams.get('file');
+    const query = urlParams.get('q');
+    
+    if (fileName) {
+        // Find the details element containing this file
+        // We look for the summary span text
+        const summaries = document.querySelectorAll('summary .file-name');
+        for (let span of summaries) {
+            if (span.textContent.includes(fileName)) {
+                const details = span.closest('details');
+                if (details) {
+                    details.open = true;
+                    
+                    // Wait for expansion/rendering if needed
+                    setTimeout(() => {
+                        details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        
+                        // If there is a query, try to find/highlight it
+                        if (query) {
+                           // Use window.find() as a simple native way to highlight/jump
+                           // Note: window.find is non-standard but widely supported in desktop browsers
+                           // We scope it to the details element if possible? No, window.find searches the whole page.
+                           // But we just scrolled there.
+                           
+                           // Alternatively, we can use a primitive Highlighter on the content div
+                           const contentDiv = details.querySelector('.file-list-content');
+                           if (contentDiv) {
+                               highlightAndScroll(contentDiv, query);
+                           }
+                        }
+                    }, 100);
+                }
+                break;
+            }
         }
     }
 });
+
+function highlightAndScroll(container, text) {
+    if (!text) return;
+    
+    // Simple text node walker to find matches
+    const treeWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    const nodeList = [];
+    while(treeWalker.nextNode()) nodeList.push(treeWalker.currentNode);
+    
+    const lowerText = text.toLowerCase();
+    
+    for (let node of nodeList) {
+        const val = node.nodeValue;
+        const idx = val.toLowerCase().indexOf(lowerText);
+        
+        if (idx !== -1) {
+            // Found a match!
+            // Create a range to select/highlight
+            // Since we can't easily "highlight" without modifying DOM and potentially breaking syntax highlighting or JSON structure,
+            // we will just scroll this element into view and maybe flash it.
+            
+            const range = document.createRange();
+            range.setStart(node, idx);
+            range.setEnd(node, idx + text.length);
+            
+            const span = document.createElement('mark');
+            span.style.backgroundColor = 'yellow';
+            span.style.color = 'black';
+            
+            // Complex to wrap text node partially without breaking things, 
+            // but for a "jump to" feature, just scrolling the parent element is often enough.
+            const parent = node.parentElement;
+            parent.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            parent.style.transition = 'background-color 0.5s';
+            parent.style.backgroundColor = '#fffbeb'; // light yellow
+            
+            // Try to use Selection API to highlight for user
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            
+            break; // Stop after first match
+        }
+    }
+}
+
 
 // Custom Multi-Select Dropdown Helper
 class CustomMultiSelect {

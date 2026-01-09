@@ -120,7 +120,7 @@ func (s *Server) searchHandler(w http.ResponseWriter, r *http.Request) {
 						results = append(results, SearchResult{
 							Category: fmt.Sprintf("File: %s", group),
 							Title:    file.FileName,
-							Link:     "/", // TODO: Deep link to home page accordion?
+							Link:     fmt.Sprintf("/?file=%s&q=%s", file.FileName, query),
 							Preview:  preview,
 						})
 						mu.Unlock()

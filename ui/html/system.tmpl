@@ -58,17 +58,51 @@
             <h3>System Info</h3>
             {{if .System.Uname.KernelName}}
             <div class="stat-row">
-                <span class="stat-label">Kernel</span>
-                <span class="stat-value">{{.System.Uname.KernelName}} {{.System.Uname.KernelRelease}}</span>
+                <span class="stat-label" title="The operating system kernel name (e.g., Linux)">Kernel Name</span>
+                <span class="stat-value">{{.System.Uname.KernelName}}</span>
             </div>
             <div class="stat-row">
-                <span class="stat-label">Arch</span>
+                <span class="stat-label" title="The network node hostname">Hostname</span>
+                <span class="stat-value">{{.System.Uname.Hostname}}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" title="The kernel release version (often includes OS-specific suffixes like .el8 for RHEL 8)">Kernel Release</span>
+                <span class="stat-value">{{.System.Uname.KernelRelease}}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" title="Detailed build information and compilation timestamp">Kernel Version</span>
+                <span class="stat-value" style="font-size: 0.85em;">{{.System.Uname.KernelVersion}}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" title="The machine hardware architecture (e.g., x86_64, aarch64)">Arch</span>
                 <span class="stat-value">{{.System.Uname.Machine}}</span>
             </div>
             <div class="stat-row">
-                <span class="stat-label">OS</span>
+                <span class="stat-label" title="The operating system type (usually GNU/Linux)">Kernel OS</span>
                 <span class="stat-value">{{.System.Uname.OperatingSystem}}</span>
             </div>
+            {{if .System.Uname.Distro}}
+            <div class="stat-row">
+                <span class="stat-label" title="Inferred Linux distribution based on kernel release patterns">OS Distribution</span>
+                <span class="stat-value" style="font-weight: bold; color: var(--link-color);">{{.System.Uname.Distro}}</span>
+            </div>
+            {{end}}
+            <div class="stat-row">
+                <span class="stat-label" title="Whether the system is likely running in a container or on a physical/virtual host">Environment</span>
+                <span class="stat-value">
+                    {{if .System.Uname.IsContainer}}
+                    <span class="status-tag status-warning">Container / K8s</span>
+                    {{else}}
+                    <span class="status-tag status-healthy">Physical / VM</span>
+                    {{end}}
+                </span>
+            </div>
+            {{if .System.Uname.CloudProvider}}
+            <div class="stat-row">
+                <span class="stat-label" title="Inferred cloud provider based on hostname patterns">Cloud Provider</span>
+                <span class="stat-value" style="font-weight: bold;">{{.System.Uname.CloudProvider}}</span>
+            </div>
+            {{end}}
             {{if .System.DMI.Manufacturer}}
             <div class="stat-row">
                 <span class="stat-label">Manufacturer</span>
@@ -255,32 +289,6 @@
             </div>
             {{end}}
         </div>
-        
-        <!-- VM Stats -->
-        <div class="card">
-            <h3>VM Statistics</h3>
-             {{if .System.VMStat.ContextSwitches}}
-            <div class="stat-row">
-                <span class="stat-label">Context Switches</span>
-                <span class="stat-value">{{.System.VMStat.ContextSwitches}}</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Forks</span>
-                <span class="stat-value">{{.System.VMStat.ProcessesForked}}</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Procs Running</span>
-                <span class="stat-value">{{.System.VMStat.ProcsRunning}}</span>
-            </div>
-            <div class="stat-row">
-                <span class="stat-label">Procs Blocked</span>
-                <span class="stat-value" {{if gt .System.VMStat.ProcsBlocked 0}}style="color: red; font-weight: bold;"{{end}}>{{.System.VMStat.ProcsBlocked}}</span>
-            </div>
-            {{else}}
-            <p>VM statistics not available.</p>
-            {{end}}
-        </div>
-
     </div>
 
     <!-- Disk Usage -->

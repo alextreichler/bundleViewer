@@ -9,10 +9,12 @@ type PartitionInfo struct {
 
 // PartitionLeader represents the leader of a single partition.
 type PartitionLeader struct {
-	Ns          string `json:"ns"`
-	Topic       string `json:"topic"`
-	PartitionID int    `json:"partition_id"`
-	Leader      int    `json:"leader"`
+	Ns                   string `json:"ns"`
+	Topic                string `json:"topic"`
+	PartitionID          int    `json:"partition_id"`
+	Leader               int    `json:"leader"`
+	PreviousLeader       int    `json:"previous_leader"`
+	LastStableLeaderTerm int    `json:"last_stable_leader_term"`
 }
 
 // ClusterPartition represents a single partition in the cluster.

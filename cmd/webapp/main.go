@@ -82,6 +82,7 @@ func main() {
 
 	var sqliteStore *store.SQLiteStore
 	var cachedData *cache.CachedData
+	var initialProgress *models.ProgressTracker
 
 	if bundlePath != "" {
 		// Determine if we should clean the DB (default true, unless -persist is set)
@@ -96,7 +97,7 @@ func main() {
 		}
 
 		// Initialize the cache with a temporary tracker
-		initialProgress := models.NewProgressTracker(21)
+		initialProgress = models.NewProgressTracker(21)
 		cachedData, err = cache.New(bundlePath, sqliteStore, *logsOnly, initialProgress)
 		if err != nil {
 			logger.Error("Failed to create cache", "error", err)
@@ -112,7 +113,7 @@ func main() {
 		storeInterface = sqliteStore
 	}
 
-	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist) // Pass logger, logsOnly, persist
+	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress) // Pass logger, logsOnly, persist
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)
