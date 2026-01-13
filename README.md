@@ -74,7 +74,17 @@ bundleViewer /path/to/extracted/bundle
 *   `-persist`: Keep the SQLite database (`bundle.db`) after the server stops.
 *   `-logs-only`: Only process and display logs (faster loading).
 
+## 🛡️ Security Notice
+
+**This tool is designed for local desktop use only.**
+
+*   **Local File Access:** The tool has access to the filesystem of the user running it. It exposes features to browse and open directories.
+*   **Network Exposure:** By default, it binds to `127.0.0.1` (localhost). **Do not** bind it to `0.0.0.0` or expose it to a public network, as this would allow unauthenticated remote access to your files.
+*   **Input Validation:** While efforts are made to sanitize inputs, you should only open diagnostic bundles from trusted sources.
+
 ## 🏗️ Architecture
+
+The project follows a standard Go project layout:
 
 *   `internal/parser/`: Specialized logic for Redpanda logs, metrics, admin API responses, and Linux system files (`sar`, `vmstat`, `sysctl`).
 *   `internal/store/`: Database layer. High-performance bulk insertion and FTS indexing using SQLite.
