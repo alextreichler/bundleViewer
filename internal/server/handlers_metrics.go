@@ -43,6 +43,8 @@ type MetricsPageData struct {
 	ResourceUsage models.ResourceUsage
 	ShardCPU      []ShardCPUMetric
 	IOMetrics     []IOMetric
+	MaxReadOps    float64 // For bar calculation
+	MaxWriteOps   float64 // For bar calculation
 	SarData       models.SarData
 	CoreCount     int
 	Network       NetworkMetrics
@@ -233,9 +235,16 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Convert to slice
+	// Convert to slice and find max values
+	var maxReadOps, maxWriteOps float64
 	for _, classes := range ioMap {
 		for _, metric := range classes {
+			if metric.ReadOps > maxReadOps {
+				maxReadOps = metric.ReadOps
+			}
+			if metric.WriteOps > maxWriteOps {
+				maxWriteOps = metric.WriteOps
+			}
 			ioMetrics = append(ioMetrics, *metric)
 		}
 	}
@@ -326,6 +335,8 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		ResourceUsage: resourceUsage,
 		ShardCPU:      shardCPU,
 		IOMetrics:     ioMetrics,
+		MaxReadOps:    maxReadOps,
+		MaxWriteOps:   maxWriteOps,
 		SarData:       s.cachedData.SarData,
 		CoreCount:     s.cachedData.System.CoreCount,
 		Network:       networkMetrics,

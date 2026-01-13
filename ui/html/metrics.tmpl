@@ -193,7 +193,10 @@
     {{if .IOMetrics}}
     <div class="metric-card">
         <h3>IO Operations</h3>
-        <table class="sortable-table">
+        <p style="font-size: 0.9em; color: var(--text-color-muted);">
+            High IO skew between shards usually indicates hot partitions.
+        </p>
+        <table class="sortable-table" id="io-table">
             <thead>
                 <tr>
                     <th>Shard</th>
@@ -203,16 +206,48 @@
                 </tr>
             </thead>
             <tbody>
+                {{$maxRead := .MaxReadOps}}
+                {{$maxWrite := .MaxWriteOps}}
                 {{range .IOMetrics}}
                 <tr>
                     <td>{{.ShardID}}</td>
-                    <td>{{.Class}}</td>
-                    <td>{{printf "%.0f" .ReadOps}}</td>
-                    <td>{{printf "%.0f" .WriteOps}}</td>
+                    <td>
+                        {{if eq .Class "raft"}}
+                            <span title="Write-Ahead Log (Consensus). High writes are normal.">raft ℹ️</span>
+                        {{else if eq .Class "kafka_read"}}
+                            <span title="Consumer Fetch requests.">kafka_read ℹ️</span>
+                        {{else if eq .Class "compaction"}}
+                            <span title="Log cleanup/retention. Background task.">compaction ℹ️</span>
+                        {{else if eq .Class "default"}}
+                            <span title="General system I/O (startup, misc).">default ℹ️</span>
+                        {{else}}
+                            {{.Class}}
+                        {{end}}
+                    </td>
+                    <td style="position: relative;">
+                        {{if gt $maxRead 0.0}}
+                        <div style="position: absolute; left: 0; top: 10%; bottom: 10%; background: rgba(54, 162, 235, 0.2); width: {{printf "%.1f" (mul (div .ReadOps $maxRead) 100)}}%; border-radius: 4px;"></div>
+                        {{end}}
+                        <span style="position: relative; z-index: 1;" class="fmt-num">{{printf "%.0f" .ReadOps}}</span>
+                    </td>
+                    <td style="position: relative;">
+                        {{if gt $maxWrite 0.0}}
+                        <div style="position: absolute; left: 0; top: 10%; bottom: 10%; background: rgba(255, 99, 132, 0.2); width: {{printf "%.1f" (mul (div .WriteOps $maxWrite) 100)}}%; border-radius: 4px;"></div>
+                        {{end}}
+                        <span style="position: relative; z-index: 1;" class="fmt-num">{{printf "%.0f" .WriteOps}}</span>
+                    </td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
+        <script>
+            document.querySelectorAll('.fmt-num').forEach(el => {
+                const num = parseFloat(el.innerText);
+                if (!isNaN(num)) {
+                    el.innerText = num.toLocaleString();
+                }
+            });
+        </script>
     </div>
     {{end}}
 
