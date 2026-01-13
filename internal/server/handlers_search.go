@@ -211,6 +211,8 @@ func highlightMatch(text, query string) template.HTML {
 		idx += lastIdx
 		sb.WriteString(template.HTMLEscapeString(text[lastIdx:idx]))
 		sb.WriteString("<mark>")
+		// The query string itself must also be escaped, even though it matches our search
+		// This prevents XSS if the user searches for "<script>" and we blindly insert it back
 		sb.WriteString(template.HTMLEscapeString(text[idx : idx+len(query)]))
 		sb.WriteString("</mark>")
 		lastIdx = idx + len(query)
