@@ -213,13 +213,13 @@
                     <td>{{.ShardID}}</td>
                     <td>
                         {{if eq .Class "raft"}}
-                            <span title="Write-Ahead Log (Consensus). High writes are normal.">raft ℹ️</span>
+                            <span title="Write-Ahead Log (Consensus). High writes are normal." style="cursor: help; text-decoration: underline dotted;">raft ℹ️</span>
                         {{else if eq .Class "kafka_read"}}
-                            <span title="Consumer Fetch requests.">kafka_read ℹ️</span>
+                            <span title="Consumer Fetch requests." style="cursor: help; text-decoration: underline dotted;">kafka_read ℹ️</span>
                         {{else if eq .Class "compaction"}}
-                            <span title="Log cleanup/retention. Background task.">compaction ℹ️</span>
+                            <span title="Log cleanup/retention. Background task." style="cursor: help; text-decoration: underline dotted;">compaction ℹ️</span>
                         {{else if eq .Class "default"}}
-                            <span title="General system I/O (startup, misc).">default ℹ️</span>
+                            <span title="General system I/O (startup, misc)." style="cursor: help; text-decoration: underline dotted;">default ℹ️</span>
                         {{else}}
                             {{.Class}}
                         {{end}}
