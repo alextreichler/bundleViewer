@@ -18,6 +18,7 @@ type CpuShardProfile struct {
 type CpuSample struct {
 	UserBacktrace   string `json:"user_backtrace"`
 	SchedulingGroup string `json:"scheduling_group"`
+	Group           string `json:"group"` // Some versions use 'group'
 	Occurrences     int    `json:"occurrences"`
 }
 

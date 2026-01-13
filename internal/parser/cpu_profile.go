@@ -85,10 +85,18 @@ func ParseCpuProfiles(bundlePath string) ([]models.CpuProfileEntry, error) {
 		for _, profile := range profiles {
 			for _, shardProfile := range profile.Profile {
 				for _, sample := range shardProfile.Samples {
+					sg := sample.SchedulingGroup
+					if sg == "" {
+						sg = sample.Group
+					}
+					if sg == "" {
+						sg = "unknown"
+					}
+
 					entry := models.CpuProfileEntry{
 						Node:            nodeName,
 						ShardID:         shardProfile.ShardID,
-						SchedulingGroup: sample.SchedulingGroup,
+						SchedulingGroup: sg,
 						UserBacktrace:   sample.UserBacktrace,
 						Occurrences:     sample.Occurrences,
 					}
