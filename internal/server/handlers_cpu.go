@@ -98,12 +98,32 @@ func (s *Server) getProfileVersionAndArch() (string, string, error) {
 		return "", "", err
 	}
 
+	// Try single object first
 	var profile models.CpuProfile
-	if err := json.Unmarshal(data, &profile); err != nil {
-		return "", "", err
+	if err := json.Unmarshal(data, &profile); err == nil {
+		return profile.Version, profile.Arch, nil
 	}
 
-	return profile.Version, profile.Arch, nil
+	// Try array
+	var profiles []models.CpuProfile
+	if err := json.Unmarshal(data, &profiles); err == nil && len(profiles) > 0 {
+		return profiles[0].Version, profiles[0].Arch, nil
+	}
+
+	// Try shard array (if raw shards, they might not have version/arch at top level?
+	// CpuShardProfile doesn't have Version/Arch.
+	// But usually the array format seen so far is []CpuProfile (where each has Version/Arch)
+	// OR []CpuShardProfile.
+	// If it's []CpuShardProfile, we might be out of luck for Version/Arch unless it's in the bundle metadata.
+
+	// Let's check models.CpuShardProfile again.
+	// It only has ShardID, DroppedSamples, Samples.
+	
+	// If the file is just a list of shards, where is the metadata?
+	// In the file header? Or maybe one of the array elements is different?
+	// If we can't find it in the profile, we should try to find it elsewhere or return unknown.
+	
+	return "", "", fmt.Errorf("failed to parse cpu profile version")
 }
 
 func (s *Server) apiCpuBinaryStatusHandler(w http.ResponseWriter, r *http.Request) {
