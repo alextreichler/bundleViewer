@@ -1,40 +1,42 @@
 # BundleViewer
 
-BundleViewer is a specialized offline analysis tool designed for **Redpanda diagnostic bundles**. It parses, indexes, and visualizes the complex contents of a bundle (logs, metrics, configuration, and metadata).
+BundleViewer is a specialized offline analysis tool designed for **Redpanda diagnostic bundles**. It parses, indexes, and visualizes the complex contents of a bundle (logs, metrics, configuration, and metadata) to accelerate root-cause analysis.
 
 **You take on all risks when using this. Use at your own risk!**
-
 
 ## 🚀 Key Features
 
 *   **Hybrid Architecture:** 
     *   **In-Memory:** Critical metadata (Kubernetes resources, Kafka topic configurations, disk usage) is parsed and held in memory for instant access.
-    *   **SQLite-Backed:** High-volume data (logs, Prometheus metrics) is ingested into an embedded SQLite database.
+    *   **SQLite-Backed:** High-volume data (logs, Prometheus metrics, CPU profiles) is ingested into an embedded SQLite database.
 *   **Advanced Log Analysis:**
     *   **Full-Text Search:** Utilizes SQLite's **FTS5** extension for lightning-fast global search across gigabytes of log data.
     *   **Pattern Fingerprinting:** Automatically clusters similar log messages to identify recurring errors and anomalies without drowning in noise.
-*   **Interactive UI:** A lightweight, responsive web interface built with **Go Templates** and **HTMX**. No heavy frontend build step required.
+*   **Automated Diagnostics (Auditor):** Runs 50+ heuristic checks across:
+    *   **OS Tuning:** Verifies `sysctl` settings (AIO, network backlogs, virtual memory).
+    *   **Cluster Health:** Detects Under-Replicated Partitions (URP), leaderless partitions, and controller instability.
+    *   **Performance Bottlenecks:** Identifies CPU, Disk, and Network saturation.
+    *   **Infrastructure:** Checks for OOM events, RAID degradation, and Kubernetes pod restarts.
 *   **Rich Visualizations:**
-    *   **Timeline View:** Correlate events across nodes.
-    *   **Skew Analysis:** Detect uneven data distribution across partitions and disks.
-    *   **Resource Usage:** Visualize disk and CPU metrics over time.
+    *   **Timeline View:** Unified event stream correlating logs and K8s events across all nodes.
+    *   **Skew Analysis:** Detects uneven distribution of partitions and topics across shards and disks.
+    *   **CPU Profiling:** Visualizes reactor utilization and hot paths from internal Redpanda CPU profiles.
+    *   **Metric Dashboards:** Interactive charts for reactor utilization, I/O queue depth, and throughput.
 
 ## 🛠️ Prerequisites
 
 *   **Go:** Version 1.25 or higher.
 *   **Task:** [Taskfile](https://taskfile.dev/) is used for build automation (optional, but recommended).
-*   **SQLite:** The project uses `modernc.org/sqlite` (pure Go), so no CGO or external SQLite installation is strictly required for the build, but the underlying system must support the build targets.
+*   **SQLite:** The project uses `modernc.org/sqlite` (pure Go), so no CGO or external SQLite installation is required.
 
 ## 📦 Installation
 
 ### 1. One-Line Installation (Recommended)
-You can install the latest version of BundleViewer directly to `/usr/local/bin` using the following command:
+Install the latest version directly to `/usr/local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/install.sh | sh
 ```
-
-*This script auto-detects your OS (macOS/Linux) and architecture (amd64/arm64) and fetches the correct binary.*
 
 ### 2. Manual Installation (From Source)
 
@@ -45,21 +47,15 @@ curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/ins
     ```
 
 2.  **Build the binary:**
-    Using Task (recommended):
     ```bash
     task build
     ```
-    Or using standard Go commands:
-    ```bash
-    go build -o bundleViewer cmd/webapp/main.go
-    ```
+    *Or use `go build -o bundleViewer cmd/webapp/main.go`*
 
 ## 🖥️ Usage
 
-Run the tool by pointing it to a directory containing an unzipped Redpanda debug bundle, or simply run it without arguments to use the interactive setup wizard.
-
 ### 1. Interactive Mode (Recommended)
-Simply run the command without arguments. BundleViewer will automatically open your default browser, where you can paste the path to your bundle:
+Simply run the command without arguments. BundleViewer will open your browser to the setup page where you can paste the bundle path:
 
 ```bash
 bundleViewer
@@ -72,26 +68,18 @@ Provide the path directly via the CLI:
 bundleViewer /path/to/extracted/bundle
 ```
 
-### Using Task
-If you are developing locally:
-```bash
-task run -- /path/to/extracted/bundle
-```
-
-### Options
+### CLI Options
 *   `-port <int>`: Port to listen on (default: `7575`).
-*   `-host <string>`: Host to bind to (default: `127.0.0.1` for security).
-*   `-persist`: Keep the SQLite database (`bundle.db`) after the server stops. By default, the database is cleaned up on start to ensure a fresh state for new bundles.
-*   `-logs-only`: Only process and display logs (skips metrics and system parsing for faster loading).
+*   `-host <string>`: Host to bind to (default: `127.0.0.1`).
+*   `-persist`: Keep the SQLite database (`bundle.db`) after the server stops.
+*   `-logs-only`: Only process and display logs (faster loading).
 
 ## 🏗️ Architecture
 
-The project follows a standard Go project layout:
-
-*   `cmd/webapp/`: Entry point (`main.go`). Handles flag parsing and server initialization.
-*   `internal/parser/`: specialized logic for parsing Redpanda-specific files.
-*   `internal/store/`: Database layer. Manages the SQLite connection, schema migrations, and high-performance bulk insertion.
-*   `internal/analysis/`: Business logic for log fingerprinting and heuristic analysis.
-*   `internal/server/`: HTTP handlers and routing logic.
-*   `ui/`: Contains HTML templates (`.tmpl`) and static assets (CSS, JS). These are embedded into the binary for single-file distribution.
+*   `internal/parser/`: Specialized logic for Redpanda logs, metrics, admin API responses, and Linux system files (`sar`, `vmstat`, `sysctl`).
+*   `internal/store/`: Database layer. High-performance bulk insertion and FTS indexing using SQLite.
+*   `internal/analysis/`: Logic for log fingerprinting, performance heuristics, and partition skew calculations.
+*   `internal/diagnostics/`: The "Auditor" engine that runs automated health checks.
+*   `internal/server/`: HTMX-powered web server providing a responsive, zero-build-step UI.
+*   `ui/`: Embedded HTML templates and static assets.
 
