@@ -32,6 +32,39 @@
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
+        
+        /* Custom Tooltip CSS */
+        .tooltip-container {
+            position: relative;
+            display: inline-block;
+            cursor: help;
+            text-decoration: underline dotted;
+        }
+        .tooltip-container .tooltip-text {
+            visibility: hidden;
+            width: 200px;
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            text-align: center;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 10;
+            bottom: 125%; /* Position above */
+            left: 50%;
+            margin-left: -100px; /* Center */
+            opacity: 0;
+            transition: opacity 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            font-size: 0.85em;
+            font-weight: normal;
+            pointer-events: none;
+        }
+        .tooltip-container:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
     </style>
     {{template "nav" (dict "Active" "Metrics" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
     <h1>Metrics Overview</h1>
@@ -213,13 +246,25 @@
                     <td>{{.ShardID}}</td>
                     <td>
                         {{if eq .Class "raft"}}
-                            <span title="Write-Ahead Log (Consensus). High writes are normal." style="cursor: help; text-decoration: underline dotted;">raft ℹ️</span>
+                            <div class="tooltip-container">
+                                raft ℹ️
+                                <span class="tooltip-text">Write-Ahead Log (Consensus). High writes are normal.</span>
+                            </div>
                         {{else if eq .Class "kafka_read"}}
-                            <span title="Consumer Fetch requests." style="cursor: help; text-decoration: underline dotted;">kafka_read ℹ️</span>
+                            <div class="tooltip-container">
+                                kafka_read ℹ️
+                                <span class="tooltip-text">Consumer Fetch requests.</span>
+                            </div>
                         {{else if eq .Class "compaction"}}
-                            <span title="Log cleanup/retention. Background task." style="cursor: help; text-decoration: underline dotted;">compaction ℹ️</span>
+                            <div class="tooltip-container">
+                                compaction ℹ️
+                                <span class="tooltip-text">Log cleanup/retention. Background task.</span>
+                            </div>
                         {{else if eq .Class "default"}}
-                            <span title="General system I/O (startup, misc)." style="cursor: help; text-decoration: underline dotted;">default ℹ️</span>
+                            <div class="tooltip-container">
+                                default ℹ️
+                                <span class="tooltip-text">General system I/O (startup, misc).</span>
+                            </div>
                         {{else}}
                             {{.Class}}
                         {{end}}
