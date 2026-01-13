@@ -107,9 +107,14 @@ func (s *Server) getProfileVersionAndArch() (string, string, error) {
 		}
 	}
 
-	// Fallback: Detect from logs
-	version, err := s.detectVersionFromLogs()
-	if err == nil && version != "" {
+	// Fallback 1: Detect from brokers.json
+	version := s.detectVersionFromBrokers()
+	if version == "" {
+		// Fallback 2: Detect from logs
+		version, _ = s.detectVersionFromLogs()
+	}
+
+	if version != "" {
 		// Arch fallback
 		arch := "amd64"
 		if s.cachedData != nil && s.cachedData.System.Uname.Machine != "" {
@@ -123,7 +128,29 @@ func (s *Server) getProfileVersionAndArch() (string, string, error) {
 		return version, arch, nil
 	}
 
-	return "", "", fmt.Errorf("failed to parse cpu profile version and could not detect from logs")
+	return "", "", fmt.Errorf("failed to parse cpu profile version and could not detect from brokers or logs")
+}
+
+func (s *Server) detectVersionFromBrokers() string {
+	if s.cachedData == nil {
+		return ""
+	}
+
+	for _, file := range s.cachedData.GroupedFiles["Admin"] {
+		if file.FileName == "brokers.json" {
+			if brokers, ok := file.Data.([]interface{}); ok {
+				for _, brokerData := range brokers {
+					if broker, ok := brokerData.(map[string]interface{}); ok {
+						if v, ok := broker["version"].(string); ok && v != "" {
+							return v
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+	return ""
 }
 
 func (s *Server) detectVersionFromLogs() (string, error) {

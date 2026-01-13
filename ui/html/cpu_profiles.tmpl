@@ -327,6 +327,11 @@
         async function checkBinaryStatus() {
             try {
                 const res = await fetch('/api/cpu/binary-status');
+                if (!res.ok) {
+                    const text = await res.text();
+                    updateBinaryStatusUIError(text);
+                    return;
+                }
                 const data = await res.json();
                 binaryExists = data.exists;
                 if (binaryExists) {
@@ -337,7 +342,22 @@
                 }
             } catch (e) {
                 console.error("Failed to check binary status", e);
+                updateBinaryStatusUIError(e.message);
             }
+        }
+
+        function updateBinaryStatusUIError(message) {
+            const container = document.getElementById('binary-status-container');
+            if (!container) return;
+            container.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.2em;">❌</span>
+                    <div>
+                        <div style="color: var(--error-color); font-weight: bold;">Binary Check Failed</div>
+                        <div style="font-size: 0.8em; color: var(--text-color-muted);">${message}</div>
+                    </div>
+                </div>
+            `;
         }
 
         function updateBinaryStatusUI(exists, version) {
