@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -28,17 +29,14 @@ func ParseCpuProfiles(bundlePath string) ([]models.CpuProfileEntry, error) {
 		baseName := filepath.Base(file)
 		nodeName := strings.TrimPrefix(baseName, "cpu_profile_")
 		nodeName = strings.TrimSuffix(nodeName, ".json")
-		
+
 		// Clean up node name if it has common prefixes/suffixes from the bundle collection
 		// e.g. "https---"
-		if strings.HasPrefix(nodeName, "https---") {
-			nodeName = strings.TrimPrefix(nodeName, "https---")
-		}
+		nodeName = strings.TrimPrefix(nodeName, "https---")
 		// e.g. port suffix like ".-9644" if present (seen in errors.txt)
 		if idx := strings.LastIndex(nodeName, ".-"); idx != -1 {
 			nodeName = nodeName[:idx]
 		}
-
 
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -46,22 +44,34 @@ func ParseCpuProfiles(bundlePath string) ([]models.CpuProfileEntry, error) {
 			continue
 		}
 
-		var profile models.CpuProfile
-		if err := json.Unmarshal(data, &profile); err != nil {
-			slog.Warn("Failed to unmarshal cpu profile", "path", file, "error", err)
-			continue
+		var profiles []models.CpuProfile
+		trimmedData := bytes.TrimSpace(data)
+		if len(trimmedData) > 0 && trimmedData[0] == '[' {
+			if err := json.Unmarshal(trimmedData, &profiles); err != nil {
+				slog.Warn("Failed to unmarshal cpu profile array", "path", file, "error", err)
+				continue
+			}
+		} else {
+			var profile models.CpuProfile
+			if err := json.Unmarshal(data, &profile); err != nil {
+				slog.Warn("Failed to unmarshal cpu profile", "path", file, "error", err)
+				continue
+			}
+			profiles = append(profiles, profile)
 		}
 
-		for _, shardProfile := range profile.Profile {
-			for _, sample := range shardProfile.Samples {
-				entry := models.CpuProfileEntry{
-					Node:            nodeName,
-					ShardID:         shardProfile.ShardID,
-					SchedulingGroup: sample.SchedulingGroup,
-					UserBacktrace:   sample.UserBacktrace,
-					Occurrences:     sample.Occurrences,
+		for _, profile := range profiles {
+			for _, shardProfile := range profile.Profile {
+				for _, sample := range shardProfile.Samples {
+					entry := models.CpuProfileEntry{
+						Node:            nodeName,
+						ShardID:         shardProfile.ShardID,
+						SchedulingGroup: sample.SchedulingGroup,
+						UserBacktrace:   sample.UserBacktrace,
+						Occurrences:     sample.Occurrences,
+					}
+					allEntries = append(allEntries, entry)
 				}
-				allEntries = append(allEntries, entry)
 			}
 		}
 	}
