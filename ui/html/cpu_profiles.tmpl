@@ -196,28 +196,92 @@
         let binaryExists = false;
         let addr2lineCmd = 'addr2line'; // Default
 
-        const groupColors = {
-            'main': '#FF6384',          // Red-ish
-            'kafka': '#36A2EB',         // Blue
-            'raft': '#FFCE56',          // Yellow
-            'fetch': '#4BC0C0',         // Teal
-            'admin': '#9966FF',         // Purple
-            'storage': '#FF9F40',       // Orange
-            'compaction': '#71B37C',    // Green
-            'cloud_storage': '#A0CFEC', // Light Blue
-            'archival': '#F660AB'       // Pink
+        const palettes = {
+            default: { // Light, Dark, Compact, Ultra-Dark
+                'main': '#FF6384',          // Red-ish
+                'kafka': '#36A2EB',         // Blue
+                'raft': '#FFCE56',          // Yellow
+                'fetch': '#4BC0C0',         // Teal
+                'admin': '#9966FF',         // Purple
+                'storage': '#FF9F40',       // Orange
+                'compaction': '#71B37C',    // Green
+                'cloud_storage': '#A0CFEC', // Light Blue
+                'archival': '#F660AB'       // Pink
+            },
+            retro: { // Vaporwave: Cyan, Magenta, Neon
+                'main': '#ff00ff',          // Magenta
+                'kafka': '#00ffff',         // Cyan
+                'raft': '#ffff00',          // Yellow
+                'fetch': '#39ff14',         // Neon Green
+                'admin': '#be00fe',         // Purple
+                'storage': '#ff5f1f',       // Neon Orange
+                'compaction': '#00ff00',    // Green
+                'cloud_storage': '#7df9ff', // Electric Blue
+                'archival': '#ff69b4'       // Hot Pink
+            },
+            powershell: { // High contrast terminal
+                'main': '#ff0000',          // Red
+                'kafka': '#00ffff',         // Cyan
+                'raft': '#ffff00',          // Yellow
+                'fetch': '#00ff00',         // Green
+                'admin': '#ff00ff',         // Magenta
+                'storage': '#ffffff',       // White
+                'compaction': '#cccccc',    // Grey
+                'cloud_storage': '#888888', // Dark Grey
+                'archival': '#ff3333'       // Light Red
+            }
         };
 
-        const fallbackPalette = [
-            '#E7E9ED', '#2554C7', '#E55451'
-        ];
+        const fallbackPalettes = {
+            default: ['#E7E9ED', '#2554C7', '#E55451'],
+            retro: ['#00ffff', '#ff00ff', '#ffff00'],
+            powershell: ['#ffffff', '#ffff00', '#00ffff']
+        };
+
+        function getCurrentPalette() {
+            const theme = document.documentElement.getAttribute('data-theme') || 'light';
+            if (theme === 'retro') return { colors: palettes.retro, fallback: fallbackPalettes.retro };
+            if (theme === 'powershell') return { colors: palettes.powershell, fallback: fallbackPalettes.powershell };
+            return { colors: palettes.default, fallback: fallbackPalettes.default };
+        }
 
         function getGroupColor(group, index) {
-            if (groupColors[group]) {
-                return groupColors[group];
+            const { colors, fallback } = getCurrentPalette();
+            if (colors[group]) {
+                return colors[group];
             }
-            return fallbackPalette[index % fallbackPalette.length];
+            return fallback[index % fallback.length];
         }
+
+        function getThemeTextColor() {
+            const theme = document.documentElement.getAttribute('data-theme') || 'light';
+            if (theme === 'light' || theme === 'compact') return '#666666';
+            if (theme === 'retro') return '#00ffff'; // Cyan text for retro
+            if (theme === 'powershell') return '#eeedf0'; // White/Gray for powershell
+            return '#e2e8f0'; // Light gray for dark themes
+        }
+
+        function getThemeGridColor() {
+            const theme = document.documentElement.getAttribute('data-theme') || 'light';
+            if (theme === 'light' || theme === 'compact') return 'rgba(0,0,0,0.1)';
+            if (theme === 'retro') return 'rgba(0, 255, 255, 0.2)'; // Dim cyan
+            if (theme === 'powershell') return '#cccccc'; // Grey
+            return 'rgba(255,255,255,0.1)'; // Dim white for dark
+        }
+
+        // Watch for theme changes
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+                    renderChart();
+                }
+            });
+        });
+        
+        observer.observe(document.documentElement, {
+            attributes: true, 
+            attributeFilter: ['data-theme']
+        });
 
         async function loadData() {
             const selector = document.getElementById('node-selector');
@@ -232,7 +296,8 @@
                 }
                 
                 if (selector) selector.innerHTML = '<option>Parsing data...</option>';
-                rawData = await response.json();
+                const data = await response.json();
+                rawData = data || [];
                 
                 if (selector) selector.innerHTML = '<option>Rendering...</option>';
                 populateNodeSelector();
@@ -412,6 +477,8 @@
             });
 
             const ctx = document.getElementById('cpuChart').getContext('2d');
+            const textColor = getThemeTextColor();
+            const gridColor = getThemeGridColor();
 
             if (chartInstance) {
                 chartInstance.destroy();
@@ -426,6 +493,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    color: textColor,
                     onClick: (e) => {
                         const points = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
                         if (points.length) {
@@ -443,15 +511,22 @@
                     scales: {
                         x: {
                             stacked: true,
-                            title: { display: true, text: 'Shards' }
+                            title: { display: true, text: 'Shards', color: textColor },
+                            ticks: { color: textColor },
+                            grid: { color: gridColor }
                         },
                         y: {
                             stacked: true,
-                            title: { display: true, text: 'CPU Usage (%)' },
-                            max: 100
+                            title: { display: true, text: 'CPU Usage (%)', color: textColor },
+                            max: 100,
+                            ticks: { color: textColor },
+                            grid: { color: gridColor }
                         }
                     },
                     plugins: {
+                        legend: {
+                            labels: { color: textColor }
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {

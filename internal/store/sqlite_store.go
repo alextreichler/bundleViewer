@@ -1237,11 +1237,12 @@ func (s *SQLiteStore) GetDistinctMetricNames() ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to query cpu profiles: %w", err)
 		}
-		defer func() { _ = rows.Close() }()
-	
-		var rawResults []models.CpuProfileAggregate
+			defer func() { _ = rows.Close() }()
 		
-		type key struct {
+			rawResults := make([]models.CpuProfileAggregate, 0)
+			
+			type key struct {
+		
 			node  string
 			shard int
 		}
