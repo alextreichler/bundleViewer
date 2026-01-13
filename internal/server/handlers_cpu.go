@@ -52,8 +52,16 @@ func (s *Server) apiCpuProfileDetailsHandler(w http.ResponseWriter, r *http.Requ
 	shard := r.URL.Query().Get("shard")
 	group := r.URL.Query().Get("group")
 
-	if node == "" || shard == "" || group == "" {
-		http.Error(w, "Missing node, shard, or group parameter", http.StatusBadRequest)
+	if node == "" {
+		http.Error(w, "Missing node parameter", http.StatusBadRequest)
+		return
+	}
+	if shard == "" {
+		http.Error(w, "Missing shard parameter", http.StatusBadRequest)
+		return
+	}
+	if group == "" {
+		http.Error(w, "Missing group parameter", http.StatusBadRequest)
 		return
 	}
 

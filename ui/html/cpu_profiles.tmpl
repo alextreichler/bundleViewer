@@ -553,6 +553,10 @@
 
             try {
                 const res = await fetch(`/api/cpu/details?node=${encodeURIComponent(node)}&shard=${shard}&group=${encodeURIComponent(group)}`);
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || `Server error: ${res.status}`);
+                }
                 const data = await res.json();
 
                 tbody.innerHTML = '';
