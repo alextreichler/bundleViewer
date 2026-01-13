@@ -47,9 +47,31 @@ func ParseCpuProfiles(bundlePath string) ([]models.CpuProfileEntry, error) {
 		var profiles []models.CpuProfile
 		trimmedData := bytes.TrimSpace(data)
 		if len(trimmedData) > 0 && trimmedData[0] == '[' {
+			// Try unmarshalling as []models.CpuProfile
 			if err := json.Unmarshal(trimmedData, &profiles); err != nil {
 				slog.Warn("Failed to unmarshal cpu profile array", "path", file, "error", err)
 				continue
+			}
+			
+			// Check if we actually got data. If not, maybe it's []models.CpuShardProfile
+			hasData := false
+			for _, p := range profiles {
+				if len(p.Profile) > 0 {
+					hasData = true
+					break
+				}
+			}
+
+			if !hasData {
+				var shardProfiles []models.CpuShardProfile
+				if err := json.Unmarshal(trimmedData, &shardProfiles); err == nil && len(shardProfiles) > 0 {
+					// It was a list of shards! Wrap it in a single profile
+					profiles = []models.CpuProfile{
+						{
+							Profile: shardProfiles,
+						},
+					}
+				}
 			}
 		} else {
 			var profile models.CpuProfile
