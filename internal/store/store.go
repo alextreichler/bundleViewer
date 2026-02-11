@@ -31,6 +31,6 @@ type Store interface {
 	GetCpuProfiles() ([]models.CpuProfileAggregate, error)
 	GetCpuProfileDetails(node string, shardID int, group string) ([]models.CpuProfileDetail, error)
 
-	Optimize() error
+	Optimize(p *models.ProgressTracker) error
 	Close() error
 }

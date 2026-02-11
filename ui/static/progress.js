@@ -9,8 +9,15 @@ document.addEventListener("DOMContentLoaded", function() {
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
             const progress = data.progress;
+            const status = data.status;
+            
             progressBar.style.width = progress + '%';
             progressBar.textContent = progress + '%';
+            
+            const statusEl = document.getElementById('loading-status');
+            if (statusEl && status) {
+                statusEl.textContent = status;
+            }
 
             if (progress >= 100) {
                 eventSource.close();

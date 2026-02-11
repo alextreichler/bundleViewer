@@ -20,7 +20,7 @@
                 {{range .Files}}
                 <li style="margin-bottom: 5px;">
                     <button class="link-btn" 
-                            hx-get="/segments/view?file={{.}}" 
+                            hx-get="/segments/view?path={{.}}" 
                             hx-target="#segment-detail" 
                             hx-indicator="#loading"
                             style="text-align: left; width: 100%; border: 1px solid var(--border-color); background: none; color: var(--link-color); padding: 8px; cursor: pointer;">

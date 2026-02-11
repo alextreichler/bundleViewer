@@ -19,6 +19,8 @@ import (
 	"github.com/alextreichler/bundleViewer/internal/store"
 )
 
+var Version = "dev"
+
 func openBrowser(url string) {
 	var err error
 
@@ -42,6 +44,7 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "Host to bind to (default: 127.0.0.1 for security)")
 	persist := flag.Bool("persist", false, "Persist the database between runs (default: clean on start)")
 	logsOnly := flag.Bool("logs-only", false, "Only process and display logs")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] <bundle-directory>\n", os.Args[0])
@@ -50,6 +53,11 @@ func main() {
 	}
 	
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("bundleViewer version %s\n", Version)
+		os.Exit(0)
+	}
 
 	// Initialize the logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))

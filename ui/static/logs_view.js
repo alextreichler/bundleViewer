@@ -278,10 +278,21 @@ if (!window.logsViewInitialized) {
                 actionBtn = `<button class="trace-btn" onclick="openTraceModal(${i})" style="font-size: 0.8em; padding: 2px 6px; cursor: pointer;">View Trace</button>`;
             }
 
+            // Insight Badge
+            let insightHtml = '';
+            if (log.insight) {
+                insightHtml = `<div class="insight-badge severity-${log.insight.severity}" title="${log.insight.action}">
+                    ${log.insight.description}
+                </div>`;
+            }
+
             // Message Display (Truncated if too long for one line, but we rely on CSS mostly)
             // We use a div inside the cell to enforce max-height/ellipsis if needed
             // Updated to allow 3 lines of wrapping
-            const messageHtml = `<div style="max-height: ${window.rowHeight}px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; line-height: 1.4;">${log.linkedMsg}</div>`;
+            const messageHtml = `<div style="max-height: ${window.rowHeight}px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; line-height: 1.4;">
+                ${insightHtml}
+                ${log.linkedMsg}
+            </div>`;
 
             tr.innerHTML = `
                 <td style="white-space:nowrap;">${new Date(log.timestamp).toISOString().replace('T', ' ').substring(0, 23)}</td>

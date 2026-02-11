@@ -35,6 +35,7 @@ type KafkaMetadataResponse struct {
 		} `json:"Partitions"`
 		Err interface{} `json:"Err"`
 	} `json:"Topics"`
+	AuthorizedOperations []string `json:"AuthorizedOperations"`
 }
 
 type ConsumerGroup struct {

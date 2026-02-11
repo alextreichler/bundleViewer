@@ -19,13 +19,14 @@ type PartitionLeader struct {
 
 // ClusterPartition represents a single partition in the cluster.
 type ClusterPartition struct {
-	Ns          string `json:"ns"`
-	Topic       string `json:"topic"`
-	PartitionID int    `json:"partition_id"`
-	Replicas    []struct {
+	Ns           string    `json:"ns"`
+	Topic        string    `json:"topic"`
+	PartitionID  int       `json:"partition_id"`
+	Status       string    `json:"status"`
+	LeaderID     int       `json:"leader_id"`
+	Replicas     []struct {
 		NodeID int `json:"node_id"`
 		Core   int `json:"core"`
 	} `json:"replicas"`
-	Disabled bool `json:"disabled"`
-	Leader   int  `json:"leader"` // Add Leader field
+	Revision     int       `json:"revision"`
 }

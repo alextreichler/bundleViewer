@@ -762,3 +762,76 @@ func ParseSS(bundlePath string) ([]models.NetworkConnection, error) {
 	}
 	return connections, nil
 }
+
+// ParseTHP parses /sys/kernel/mm/transparent_hugepage/enabled
+func ParseTHP(bundlePath string) (string, error) {
+	// Try multiple common paths inside the bundle
+	paths := []string{
+		filepath.Join(bundlePath, "sys", "kernel", "mm", "transparent_hugepage", "enabled"),
+		filepath.Join(bundlePath, "sys", "kernel", "mm", "redhat_transparent_hugepage", "enabled"), // RHEL/CentOS
+	}
+
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			return strings.TrimSpace(string(data)), nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
+// ParseInterrupts parses /proc/interrupts
+func ParseInterrupts(bundlePath string) (models.Interrupts, error) {
+	filePath := filepath.Join(bundlePath, "proc", "interrupts")
+	file, err := os.Open(filePath)
+	if err != nil {
+		return models.Interrupts{}, err
+	}
+	defer func() { _ = file.Close() }()
+
+	var interrupts models.Interrupts
+	scanner := bufio.NewScanner(file)
+
+	// First line is header:           CPU0       CPU1 ...
+	if scanner.Scan() {
+		header := scanner.Text()
+		interrupts.CPUs = strings.Fields(header)
+	}
+
+	numCPUs := len(interrupts.CPUs)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Fields(line)
+		if len(parts) < numCPUs+1 {
+			continue
+		}
+
+		entry := models.IRQEntry{
+			IRQID: strings.TrimSuffix(parts[0], ":"),
+		}
+
+		for i := 0; i < numCPUs; i++ {
+			val, _ := strconv.ParseInt(parts[i+1], 10, 64)
+			entry.CPUCounts = append(entry.CPUCounts, val)
+		}
+
+		// Remaining parts are controller and device
+		if len(parts) > numCPUs+1 {
+			rest := parts[numCPUs+1:]
+			// Try to capture meaningful device name
+			// Format varies: IO-APIC 2-edge timer
+			// or: PCI-MSI 524288-edge nvme0q0
+			if len(rest) > 0 {
+				entry.Controller = rest[0]
+				if len(rest) > 1 {
+					entry.Device = strings.Join(rest[1:], " ")
+				} else {
+					entry.Device = rest[0] // Fallback
+				}
+			}
+		}
+		interrupts.Entries = append(interrupts.Entries, entry)
+	}
+	return interrupts, nil
+}

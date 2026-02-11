@@ -1,6 +1,7 @@
 package models
 
 type TopicConfigsResponse []TopicConfig
+type BrokerConfigsResponse []TopicConfig
 
 type TopicConfig struct {
 	Name       string        `json:"Name"`

@@ -14,6 +14,13 @@ type LogEntry struct {
 	FilePath   string    `json:"filePath"`
 	Fingerprint string   `json:"fingerprint"`
 	Snippet     string   `json:"snippet"` // FTS snippet with highlighting
+	Insight     *LogInsight `json:"insight,omitempty"`
+}
+
+type LogInsight struct {
+	Description string `json:"description"`
+	Severity    string `json:"severity"`
+	Action      string `json:"action"`
 }
 
 type LogFilter struct {
@@ -30,10 +37,11 @@ type LogFilter struct {
 }
 
 type LogPattern struct {
-	Signature   string    `json:"signature"`
-	Count       int       `json:"count"`
-	Level       string    `json:"level"`
-	SampleEntry LogEntry  `json:"sample_entry"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
+	Signature   string      `json:"signature"`
+	Count       int         `json:"count"`
+	Level       string      `json:"level"`
+	SampleEntry LogEntry    `json:"sample_entry"`
+	FirstSeen   time.Time   `json:"first_seen"`
+	LastSeen    time.Time   `json:"last_seen"`
+	Insight     *LogInsight `json:"insight,omitempty"`
 }

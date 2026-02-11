@@ -12,6 +12,7 @@
 			<div id="progress-container">
 				<div id="progress-bar">0%</div>
 			</div>
+            <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem; text-align: center;"></p>
 		</div>
 	</div>
     {{template "nav" (dict "Active" "Disk" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
@@ -41,21 +42,31 @@
 	</table>
 
 	<h2>Disk Usage per Topic</h2>
-	<table>
+    {{if .StorageAnalysis}}
+    <p>
+        <strong>Active Topics:</strong> {{.StorageAnalysis.ActiveCount}} | 
+        <strong>Orphaned Topics:</strong> {{.StorageAnalysis.OrphanedCount}}
+    </p>
+    {{end}}
+	<table class="sortable-table">
 		<thead>
 			<tr>
 				<th>Topic Name</th>
+                <th>Active</th>
+                <th>Segments</th>
 				<th>Total Size</th>
 			</tr>
 		</thead>
 		<tbody>
 			{{range .TopicsDiskInfo}}
-			<tr>
+			<tr class="main-row" data-details-id="{{.Name}}-details">
 				<td><a href="#" onclick="toggleVisibility('{{.Name}}-details'); return false;">{{.Name}}</a></td>
-				<td>{{.TotalSize | formatBytes}}</td>
+                <td data-value="{{if .Active}}1{{else}}0{{end}}" {{if not .Active}}style="color: var(--danger-color, red); font-weight: bold;"{{end}}>{{if .Active}}Yes{{else}}No{{end}}</td>
+                <td data-value="{{.SegmentCount}}">{{.SegmentCount}}</td>
+				<td data-value="{{.TotalSize}}">{{.TotalSize | formatBytes}}</td>
 			</tr>
-			<tr id="{{.Name}}-details" style="display:none;">
-				<td colspan="2">
+			<tr id="{{.Name}}-details" class="details-row" style="display:none;">
+				<td colspan="4">
 					<table>
 						<thead>
 							<tr>
@@ -80,5 +91,6 @@
 
 	<script src="/static/common.js"></script>
 	<script src="/static/progress.js"></script>
+	<script src="/static/tables.js"></script>
 </body>
 </html>

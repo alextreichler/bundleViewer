@@ -178,7 +178,9 @@ func ParseLogSegment(filePath string) (models.SegmentInfo, error) {
 					if err != nil { break }
 					if keyLen > 0 {
 						// Skip key
-						r.Seek(keyLen, io.SeekCurrent)
+						if _, err := r.Seek(keyLen, io.SeekCurrent); err != nil {
+							break
+						}
 					}
 					
 					// ValueLength (Varint)
@@ -273,40 +275,6 @@ func readVarint(r io.ByteReader) (int64, error) {
 		s += 7
 	}
 	return 0, fmt.Errorf("varint overflow")
-}
-
-// parseRaftConfig parses the Raft Configuration from a Record value
-func parseRaftConfig(value []byte) (*models.RaftConfig, error) {
-	// Simplified parser based on Redpanda model.py
-	// This is a heuristic attempt.
-	if len(value) < 1 {
-		return nil, fmt.Errorf("empty value")
-	}
-	
-	// Value format: 
-	// version (int8)
-	// if version < 5: vector of brokers...
-	// if version >= 6: envelope...
-	
-	// Let's assume simplest case or try to find pattern.
-	// Vector of VNodes: [Size(int32), VNode1, VNode2...]
-	// VNode: ID(int32), Revision(int64)
-	
-	// Given the complexity, let's just look for a sequence of (NodeID, Revision) which look like small integers + large integers.
-	// Or, if version < 5:
-	// current_config: vector<vnode>
-	// prev_config: vector<vnode>
-	
-	// Let's try to just dump the Node IDs found.
-	config := &models.RaftConfig{}
-	
-	// Brute force scan for Node IDs? No, that's unreliable.
-	// We really need a binary reader.
-	
-	// Since I can't easily implement the full parser in one go without 'bytes.Reader',
-	// I will just return nil for now to setup the plumbing, 
-	// but I really need to implement 'parseRecords' first.
-	return config, nil
 }
 
 // ParseSnapshot reads a Redpanda snapshot file and extracts the header

@@ -67,6 +67,7 @@
             <tr>
                 <th data-type="number">Count</th>
                 <th>Level</th>
+                <th>Insight</th>
                 <th>Signature (Fingerprint)</th>
                 <th>First Seen</th>
                 <th>Last Seen</th>
@@ -77,6 +78,15 @@
             <tr class="pattern-row">
                 <td>{{.Count}}</td>
                 <td><span class="level-badge level-{{.Level}}">{{.Level}}</span></td>
+                <td>
+                    {{if .Insight}}
+                        <div class="insight-badge severity-{{.Insight.Severity}}" title="{{.Insight.Action}}">
+                            <strong>{{.Insight.Description}}</strong>
+                        </div>
+                    {{else}}
+                        <span class="text-muted">-</span>
+                    {{end}}
+                </td>
                 <td class="signature-cell" title="{{.SampleEntry.Message}}">{{.Signature}}</td>
                 <td>{{.FirstSeen.Format "15:04:05"}}</td>
                 <td>{{.LastSeen.Format "15:04:05"}}</td>

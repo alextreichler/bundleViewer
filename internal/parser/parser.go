@@ -2,9 +2,11 @@ package parser
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -115,6 +117,130 @@ func tryParseStandardLog(line string) (level, ts, shard, comp, msg string, ok bo
 	return level, ts, shard, comp, msg, true
 }
 
+// tryParseK8sLog attempts to parse a Kubernetes log line using fast string operations.
+// Format: YYYY-MM-DDTHH:MM:SSZ ... level=X ...
+func tryParseK8sLog(line string) (ts, level, comp, msg string, ok bool) {
+	if len(line) < 20 {
+		return "", "", "", "", false
+	}
+
+	// 1. Timestamp (ISO8601 at start)
+	// Expect 2006-01-02T15:04:05Z (20 chars) or similar
+	if line[10] != 'T' || line[19] != 'Z' {
+		return "", "", "", "", false
+	}
+	ts = line[:20]
+	rest := line[20:]
+
+	// 2. Level parsing (look for level=...)
+	// Scan for "level="
+	level = "INFO" // Default
+	levelIdx := strings.Index(rest, "level=")
+	if levelIdx != -1 {
+		// Extract value
+		start := levelIdx + 6
+		end := start
+		// Find end of value (space or quote)
+		if start < len(rest) && rest[start] == '"' {
+			start++
+			end = start
+			for end < len(rest) && rest[end] != '"' {
+				end++
+			}
+		} else {
+			for end < len(rest) && rest[end] != ' ' {
+				end++
+			}
+		}
+		if start < len(rest) {
+			level = strings.ToUpper(rest[start:end])
+		}
+	}
+
+	// 3. Component & Message
+	comp = "k8s-sidecar"
+	msg = strings.TrimSpace(rest)
+
+	return ts, level, comp, msg, true
+}
+
+// tryParseCSVLog attempts to parse a generic CSV log line.
+// It heuristically looks for a timestamp and a level.
+func tryParseCSVLog(line string) (ts, level, comp, msg string, ok bool) {
+	r := csv.NewReader(strings.NewReader(line))
+	r.FieldsPerRecord = -1 // Variable fields
+	record, err := r.Read()
+	if err != nil || len(record) < 2 {
+		return "", "", "", "", false
+	}
+
+	// Heuristic 1: Look for Timestamp
+	// Common formats: ISO8601, RFC3339
+	// We'll iterate fields to find something that looks like a date
+	tsIdx := -1
+	for i, field := range record {
+		if len(field) >= 19 && (field[10] == 'T' || field[10] == ' ') {
+			// Weak check for 2006-01-02...
+			if field[4] == '-' && field[7] == '-' {
+				tsIdx = i
+				ts = field
+				break
+			}
+		}
+	}
+
+	if tsIdx == -1 {
+		return "", "", "", "", false
+	}
+
+	// Heuristic 2: Look for Level (INFO, WARN, etc.)
+	// Usually short, uppercase
+	level = "INFO"
+	levelIdx := -1
+	for i, field := range record {
+		if i == tsIdx {
+			continue
+		}
+		upper := strings.ToUpper(field)
+		switch upper {
+		case "INFO", "WARN", "WARNING", "ERROR", "ERR", "DEBUG", "TRACE", "FATAL", "CRITICAL":
+			level = upper
+			levelIdx = i
+		}
+		if levelIdx != -1 {
+			break
+		}
+	}
+
+	// Heuristic 3: Component & Message
+	// Message is likely the longest remaining field
+	comp = "csv-export"
+	longestLen := 0
+	
+	for i, field := range record {
+		if i == tsIdx || i == levelIdx {
+			continue
+		}
+		if len(field) > longestLen {
+			msg = field
+			longestLen = len(field)
+		}
+	}
+
+	if msg == "" {
+		// If no message found (weird), join the rest
+		var parts []string
+		for i, field := range record {
+			if i != tsIdx && i != levelIdx {
+				parts = append(parts, field)
+			}
+		}
+		msg = strings.Join(parts, " ")
+	}
+
+	return ts, level, comp, msg, true
+}
+
 // ParseLogs reads and parses all redpanda log files and stores them in the provided store.
 func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTracker) error {
 	var allLogFiles []string
@@ -161,7 +287,7 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 				return nil // Skip directories
 			}
 			ext := strings.ToLower(filepath.Ext(path))
-			if ext == ".log" || ext == ".txt" {
+			if ext == ".log" || ext == ".txt" || ext == ".csv" {
 				allLogFiles = append(allLogFiles, path)
 			}
 			return nil
@@ -228,10 +354,7 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 		}
 	}()
 
-	// Compile regex for log parsing
-	logRegex := regexp.MustCompile(`([A-Z]+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d{3})\s+(?:\[shard\s+([^\]]+)\]\s+)?([^\s-]+)(?:\s+-\s+)?(.*)$`)
-	k8sLogRegex := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+(.*)$`)
-	levelKeyValRegex := regexp.MustCompile(`level="?([A-Za-z0-9]+)"?`)
+	// Removed slow Regex compilations
 	layout := "2006-01-02 15:04:05,000"
 
 	const batchSize = 10000 // Increased batch size for better throughput
@@ -280,93 +403,23 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 
 			for scanner.Scan() {
 				lineNumber++
+				if p != nil && lineNumber%20000 == 0 {
+					p.SetStatus(fmt.Sprintf("Parsing logs: %s (%d lines processed)", filepath.Base(filePath), lineNumber))
+				}
 				line := scanner.Text()
 
 				if len(line) > 50000 {
 					continue // Skip massive lines
 				}
 
-				// Try matching with regex
+				// Try matching with regex - REPLACED with Fast String Parsing
 
-				// 1. FAST PATH: Try parsing standard Redpanda log format without regex
-				fLevel, fTs, fShard, fComp, fMsg, ok := tryParseStandardLog(line)
-				if ok {
-					if currentEntry != nil {
-						batch = append(batch, currentEntry)
-						if len(batch) >= batchSize {
-							logBatchChan <- batch
-							batch = make([]*models.LogEntry, 0, batchSize)
-						}
-					}
+				isCSV := strings.HasSuffix(filePath, ".csv")
 
-					// Normalize timestamp
-					fTs = strings.Replace(fTs, ".", ",", 1)
-					timestamp, _ := time.Parse(layout, fTs)
-
-					// Clean up shard info
-					if idx := strings.Index(fShard, ":"); idx != -1 {
-						fShard = fShard[:idx]
-					}
-
-					currentEntry = &models.LogEntry{
-						Timestamp:  timestamp,
-						Level:      fLevel,
-						Node:       nodeName,
-						Shard:      fShard,
-						Component:  fComp,
-						Message:    fMsg,
-						Raw:        line,
-						LineNumber: lineNumber,
-						FilePath:   filePath,
-					}
-					continue
-				}
-
-				// 2. SLOW PATH: Try matching with regex (handles syslog, k8s, etc.)
-				matches := logRegex.FindStringSubmatch(line)
-				
-				if matches != nil {
-					if currentEntry != nil {
-						batch = append(batch, currentEntry)
-						if len(batch) >= batchSize {
-							// Send copy of batch to avoid race conditions if we reused the slice backing array immediately
-							// actually, since we do batch[:0], the backing array is reused.
-							// The consumer (DB writer) reads the slice. If producer overwrites it concurrently, bad things happen.
-							// So we must SEND A COPY or create a NEW slice.
-							// Creating a new slice for the next batch is safer/easier.
-							logBatchChan <- batch
-							batch = make([]*models.LogEntry, 0, batchSize)
-						}
-					}
-
-					level := matches[1]
-					timestampStr := matches[2]
-					shardInfo := strings.TrimSpace(matches[3])
-					component := strings.TrimSpace(matches[4])
-					message := strings.TrimSpace(matches[5])
-
-					timestampStr = strings.Replace(timestampStr, ".", ",", 1)
-					timestamp, _ := time.Parse(layout, timestampStr)
-
-					if idx := strings.Index(shardInfo, ":"); idx != -1 {
-						shardInfo = shardInfo[:idx]
-					}
-					shardInfo = strings.TrimSpace(shardInfo)
-
-					currentEntry = &models.LogEntry{
-						Timestamp:  timestamp,
-						Level:      level,
-						Node:       nodeName,
-						Shard:      shardInfo,
-						Component:  component,
-						Message:    message,
-						Raw:        line,
-						LineNumber: lineNumber,
-						FilePath:   filePath,
-					}
-				} else {
-					k8sMatches := k8sLogRegex.FindStringSubmatch(line)
-					if k8sMatches != nil {
+				// 0. CSV PATH
+				if isCSV {
+					cTs, cLevel, cComp, cMsg, cOk := tryParseCSVLog(line)
+					if cOk {
 						if currentEntry != nil {
 							batch = append(batch, currentEntry)
 							if len(batch) >= batchSize {
@@ -375,84 +428,154 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 							}
 						}
 
-						tsStr := k8sMatches[1]
-						rest := k8sMatches[2]
-						timestamp, _ := time.Parse(time.RFC3339, tsStr)
-
-						level := "INFO"
-						lvlMatch := levelKeyValRegex.FindStringSubmatch(rest)
-						if lvlMatch != nil {
-							level = strings.ToUpper(lvlMatch[1])
+						// Try parsing timestamp formats
+						timestamp, err := time.Parse(time.RFC3339, cTs)
+						if err != nil {
+							timestamp, err = time.Parse(time.RFC3339Nano, cTs)
+						}
+						if err != nil {
+							timestamp, _ = time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", cTs) // Google Cloud format sometimes
 						}
 
 						currentEntry = &models.LogEntry{
 							Timestamp:  timestamp,
-							Level:      level,
+							Level:      cLevel,
 							Node:       nodeName,
-							Component:  "k8s-sidecar",
-							Message:    rest,
+							Component:  cComp,
+							Message:    cMsg,
 							Raw:        line,
 							LineNumber: lineNumber,
 							FilePath:   filePath,
 						}
 						continue
 					}
+				}
 
-					trimmed := strings.TrimSpace(line)
-					if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
-						var jsonLog map[string]interface{}
-						if json.Unmarshal([]byte(trimmed), &jsonLog) == nil {
-							lvl, _ := jsonLog["level"].(string)
-							if lvl == "" { lvl = "INFO" }
-							lvl = strings.ToUpper(lvl)
-
-							tsStr, _ := jsonLog["ts"].(string)
-							if tsStr == "" { tsStr, _ = jsonLog["timestamp"].(string) }
-							ts, err := time.Parse(time.RFC3339, tsStr)
-							if err != nil {
-								ts, _ = time.Parse("2006-01-02T15:04:05.999Z07:00", tsStr)
+				// 1. FAST PATH: Try parsing standard Redpanda log format without regex
+				if !isCSV {
+					fLevel, fTs, fShard, fComp, fMsg, ok := tryParseStandardLog(line)
+					if ok {
+						if currentEntry != nil {
+							batch = append(batch, currentEntry)
+							if len(batch) >= batchSize {
+								logBatchChan <- batch
+								batch = make([]*models.LogEntry, 0, batchSize)
 							}
-
-							msg, _ := jsonLog["msg"].(string)
-							if msg == "" { msg, _ = jsonLog["message"].(string) }
-							if msg == "" { msg = trimmed }
-
-							comp, _ := jsonLog["logger"].(string)
-							if comp == "" { comp, _ = jsonLog["component"].(string) }
-							if comp == "" { comp = "sidecar" }
-
-							if currentEntry != nil {
-								batch = append(batch, currentEntry)
-							}
-							
-							currentEntry = &models.LogEntry{
-								Timestamp:  ts,
-								Level:      lvl,
-								Node:       nodeName,
-								Component:  comp,
-								Message:    msg,
-								Raw:        line,
-								LineNumber: lineNumber,
-								FilePath:   filePath,
-							}
-							continue
 						}
-					}
 
-					if currentEntry != nil {
-						currentEntry.Message += "\n" + line
-						currentEntry.Raw += "\n" + line
-					} else {
+						// Normalize timestamp
+						fTs = strings.Replace(fTs, ".", ",", 1)
+						timestamp, _ := time.Parse(layout, fTs)
+
+						// Clean up shard info
+						if idx := strings.Index(fShard, ":"); idx != -1 {
+							fShard = fShard[:idx]
+						}
+
 						currentEntry = &models.LogEntry{
-							Timestamp:  time.Time{},
-							Level:      "INFO",
+							Timestamp:  timestamp,
+							Level:      fLevel,
 							Node:       nodeName,
-							Component:  "stdout",
-							Message:    line,
+							Shard:      fShard,
+							Component:  fComp,
+							Message:    fMsg,
 							Raw:        line,
 							LineNumber: lineNumber,
 							FilePath:   filePath,
 						}
+						continue
+					}
+				}
+
+				// 2. K8S PATH: Try parsing K8s/JSON logs without regex
+				if !isCSV {
+					kTs, kLevel, kComp, kMsg, kOk := tryParseK8sLog(line)
+					if kOk {
+						if currentEntry != nil {
+							batch = append(batch, currentEntry)
+							if len(batch) >= batchSize {
+								logBatchChan <- batch
+								batch = make([]*models.LogEntry, 0, batchSize)
+							}
+						}
+						
+						timestamp, _ := time.Parse(time.RFC3339, kTs)
+
+						currentEntry = &models.LogEntry{
+							Timestamp:  timestamp,
+							Level:      kLevel,
+							Node:       nodeName,
+							Component:  kComp,
+							Message:    kMsg,
+							Raw:        line,
+							LineNumber: lineNumber,
+							FilePath:   filePath,
+						}
+						continue
+					}
+				}
+
+				// 3. JSON Fallback
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+					var jsonLog map[string]interface{}
+					if json.Unmarshal([]byte(trimmed), &jsonLog) == nil {
+						lvl, _ := jsonLog["level"].(string)
+						if lvl == "" { lvl = "INFO" }
+						lvl = strings.ToUpper(lvl)
+
+						tsStr, _ := jsonLog["ts"].(string)
+						if tsStr == "" { tsStr, _ = jsonLog["timestamp"].(string) }
+						ts, err := time.Parse(time.RFC3339, tsStr)
+						if err != nil {
+							ts, _ = time.Parse("2006-01-02T15:04:05.999Z07:00", tsStr)
+						}
+
+						msg, _ := jsonLog["msg"].(string)
+						if msg == "" { msg, _ = jsonLog["message"].(string) }
+						if msg == "" { msg = trimmed }
+
+						comp, _ := jsonLog["logger"].(string)
+						if comp == "" { comp, _ = jsonLog["component"].(string) }
+						if comp == "" { comp = "sidecar" }
+
+						if currentEntry != nil {
+							batch = append(batch, currentEntry)
+							if len(batch) >= batchSize {
+								logBatchChan <- batch
+								batch = make([]*models.LogEntry, 0, batchSize)
+							}
+						}
+						
+						currentEntry = &models.LogEntry{
+							Timestamp:  ts,
+							Level:      lvl,
+							Node:       nodeName,
+							Component:  comp,
+							Message:    msg,
+							Raw:        line,
+							LineNumber: lineNumber,
+							FilePath:   filePath,
+						}
+						continue
+					}
+				}
+
+				// 4. Multiline Handling
+				if currentEntry != nil {
+					currentEntry.Message += "\n" + line
+					currentEntry.Raw += "\n" + line
+				} else {
+					// Fallback for completely unknown lines (assume STDOUT INFO)
+					currentEntry = &models.LogEntry{
+						Timestamp:  time.Time{},
+						Level:      "INFO",
+						Node:       nodeName,
+						Component:  "stdout",
+						Message:    line,
+						Raw:        line,
+						LineNumber: lineNumber,
+						FilePath:   filePath,
 					}
 				}
 			}
@@ -545,25 +668,18 @@ func ParseDuOutput(bundlePath string, logsOnly bool) ([]models.DuEntry, error) {
 type KafkaFullData struct {
 	Metadata       models.KafkaMetadataResponse
 	TopicConfigs   models.TopicConfigsResponse
+	BrokerConfigs  models.BrokerConfigsResponse
 	ConsumerGroups map[string]models.ConsumerGroup
 }
 
 // ParseKafkaJSON reads and parses the entire kafka.json file.
 func ParseKafkaJSON(bundlePath string) (KafkaFullData, error) {
 	filePath := filepath.Join(bundlePath, "kafka.json")
-	data, err := os.ReadFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return KafkaFullData{}, err
 	}
-
-	var raw []struct {
-		Name     string          `json:"Name"`
-		Response json.RawMessage `json:"Response"`
-	}
-
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return KafkaFullData{}, fmt.Errorf("failed to parse kafka.json: %w", err)
-	}
+	defer func() { _ = f.Close() }()
 
 	fullData := KafkaFullData{
 		ConsumerGroups: make(map[string]models.ConsumerGroup),
@@ -573,7 +689,22 @@ func ParseKafkaJSON(bundlePath string) (KafkaFullData, error) {
 	groupCommits := make(map[string]map[string]map[int]*models.GroupPartitionOffset)
 	highWatermarks := make(map[string]map[int]int64)
 
-	for _, item := range raw {
+	dec := json.NewDecoder(f)
+
+	// Check for opening bracket
+	if token, err := dec.Token(); err != nil || token != json.Delim('[') {
+		return KafkaFullData{}, fmt.Errorf("expected array start in kafka.json")
+	}
+
+	for dec.More() {
+		var item struct {
+			Name     string          `json:"Name"`
+			Response json.RawMessage `json:"Response"`
+		}
+		if err := dec.Decode(&item); err != nil {
+			return KafkaFullData{}, fmt.Errorf("error decoding item in kafka.json: %w", err)
+		}
+
 		switch {
 		case item.Name == "metadata":
 			var metadata models.KafkaMetadataResponse
@@ -586,6 +717,12 @@ func ParseKafkaJSON(bundlePath string) (KafkaFullData, error) {
 			if err := json.Unmarshal(item.Response, &topicConfigs); err == nil {
 				fullData.TopicConfigs = topicConfigs
 				slog.Debug("Parsed topic_configs section from kafka.json")
+			}
+		case item.Name == "broker_configs":
+			var brokerConfigs models.BrokerConfigsResponse
+			if err := json.Unmarshal(item.Response, &brokerConfigs); err == nil {
+				fullData.BrokerConfigs = brokerConfigs
+				slog.Debug("Parsed broker_configs section from kafka.json")
 			}
 		case item.Name == "groups":
 			var groups map[string]models.ConsumerGroup
@@ -618,6 +755,11 @@ func ParseKafkaJSON(bundlePath string) (KafkaFullData, error) {
 				slog.Debug("Parsed group_commits section from kafka.json", "groupID", groupID)
 			}
 		}
+	}
+
+	// Check for closing bracket
+	if token, err := dec.Token(); err != nil || token != json.Delim(']') {
+		return KafkaFullData{}, fmt.Errorf("expected array end in kafka.json")
 	}
 
 	// Join commits with groups and calculate lag
@@ -750,15 +892,32 @@ func ParsePartitionLeaders(bundlePath string, logsOnly bool) ([]models.Partition
 // ParseClusterPartitions reads and parses the cluster_partitions.json file.
 func ParseClusterPartitions(bundlePath string) ([]models.ClusterPartition, error) {
 	filePath := filepath.Join(bundlePath, "admin", "cluster_partitions.json")
-	data, err := os.ReadFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = f.Close() }()
 
 	var partitions []models.ClusterPartition
-	err = json.Unmarshal(data, &partitions)
-	if err != nil {
-		return nil, err
+	
+	dec := json.NewDecoder(f)
+	
+	// Check for opening bracket
+	if token, err := dec.Token(); err != nil || token != json.Delim('[') {
+		return nil, fmt.Errorf("expected array start in cluster_partitions.json")
+	}
+
+	for dec.More() {
+		var p models.ClusterPartition
+		if err := dec.Decode(&p); err != nil {
+			return nil, err
+		}
+		partitions = append(partitions, p)
+	}
+
+	// Check for closing bracket
+	if token, err := dec.Token(); err != nil || token != json.Delim(']') {
+		return nil, fmt.Errorf("expected array end in cluster_partitions.json")
 	}
 
 	return partitions, nil
@@ -1237,59 +1396,104 @@ func ParsePrometheusMetrics(filePath string, allowedMetrics map[string]struct{},
 	defer func() { _ = file.Close() }()
 
 	var batch []*models.PrometheusMetric
-	const batchSize = 1000 // Batch size for bulk inserts
+	const batchSize = 5000 // Increased batch size for better throughput
+	
+	// Add GC control variables
+	var processedBytes int64
+	const gcThreshold = 50 * 1024 * 1024 // 50MB
+
 	scanner := bufio.NewScanner(file)
 
-	// regex for parsing: name{label="value",...} value
-	// This is a simplified regex and might not cover all edge cases of Prom format (e.g. escaping), but sufficient for Redpanda metrics.
-	// Groups: 1=Name, 2=Labels content (optional), 3=Value
-	re := regexp.MustCompile(`^([a-zA-Z0-9_:]+)(?:\{([^}]+)\})?\s+([0-9eE.+\-]+)`)
+	// Buffer for scanner to handle potentially long lines, though metrics are usually short
+	const maxCapacity = 5 * 1024 * 1024 // Increased to 5MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		line := scanner.Text()
+		
+		processedBytes += int64(len(line))
+		if processedBytes > gcThreshold {
+			runtime.GC()
+			processedBytes = 0
+		}
+		
+		// Skip comments and empty lines
+		if len(line) == 0 || line[0] == '#' {
 			continue
 		}
 
-		matches := re.FindStringSubmatch(line)
-		if matches == nil {
+		// Fast string parsing instead of Regex
+		// Format: metric_name{label="value"} 1.23
+
+		// 1. Find the last space which separates the value from the rest
+		// We use LastIndex because the value is always at the end, but labels might contain spaces (rare but possible)
+		// Actually, Prometheus format guarantees the value is the last token.
+		lastSpace := strings.LastIndexByte(line, ' ')
+		if lastSpace == -1 {
 			continue
 		}
 
-		name := matches[1]
+		valueStr := line[lastSpace+1:]
+		rest := line[:lastSpace] // name + labels
+
+		// Parse value
+		value, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			continue // Skip lines with invalid values, NaN, or Inf
+		}
+
+		var name string
+		var labelsJSON string
+
+		// 2. Check for labels
+		openBrace := strings.IndexByte(rest, '{')
+		closeBrace := strings.LastIndexByte(rest, '}')
+
+		if openBrace != -1 && closeBrace != -1 && closeBrace > openBrace {
+			name = rest[:openBrace]
+			labelsContent := rest[openBrace+1 : closeBrace]
+
+			// Transform label content to JSON: key="value",key2="value2" -> {"key":"value","key2":"value2"}
+			// Optimization: Avoid map allocation and json.Marshal by building JSON string directly
+			var sb strings.Builder
+			sb.WriteByte('{')
+			
+			// This naive split assumes no commas in values, which is generally true for Redpanda metrics
+			pairs := strings.Split(labelsContent, ",")
+			for i, p := range pairs {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				eq := strings.IndexByte(p, '=')
+				if eq != -1 {
+					k := strings.TrimSpace(p[:eq])
+					v := strings.TrimSpace(p[eq+1:]) // Keep quotes! "value"
+					
+					// Key needs quotes
+					sb.WriteByte('"')
+					sb.WriteString(k)
+					sb.WriteString(`":`)
+					sb.WriteString(v)
+				}
+			}
+			sb.WriteByte('}')
+			labelsJSON = sb.String()
+		} else {
+			name = strings.TrimSpace(rest)
+			labelsJSON = "{}"
+		}
+
 		if allowedMetrics != nil {
 			if _, ok := allowedMetrics[name]; !ok {
 				continue
 			}
 		}
 
-		labelsStr := matches[2]
-		valueStr := matches[3]
-
-		value, err := strconv.ParseFloat(valueStr, 64)
-		if err != nil {
-			continue
-		}
-
-		labels := make(map[string]string)
-		if labelsStr != "" {
-			// naive split by comma - assumes no commas in values.
-			// Redpanda labels usually don't have commas.
-			pairs := strings.Split(labelsStr, ",")
-			for _, p := range pairs {
-				kv := strings.SplitN(p, "=", 2)
-				if len(kv) == 2 {
-					key := strings.TrimSpace(kv[0])
-					val := strings.Trim(strings.TrimSpace(kv[1]), "\"")
-					labels[key] = val
-				}
-			}
-		}
-
 		batch = append(batch, &models.PrometheusMetric{
-			Name:   name,
-			Labels: labels,
-			Value:  value,
+			Name:       name,
+			LabelsJSON: labelsJSON,
+			Value:      value,
 		})
 
 		if len(batch) >= batchSize {

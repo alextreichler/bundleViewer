@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -378,7 +377,9 @@ func (s *Server) handleMetricsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(names)
+	if err := json.NewEncoder(w).Encode(names); err != nil {
+		s.logger.Error("Failed to encode metric names", "error", err)
+	}
 }
 
 // API Handler for Metric Data (Chart.js format)
@@ -459,129 +460,7 @@ func (s *Server) handleMetricsData(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-type TopicDiskInfo struct {
-	Name       string
-	TotalSize  int64
-	Partitions map[string]int64
-}
-
-func (s *Server) diskOverviewHandler(w http.ResponseWriter, r *http.Request) {
-	resourceUsage := s.cachedData.ResourceUsage
-	dataDiskStats := s.cachedData.DataDiskStats
-	cacheDiskStats := s.cachedData.CacheDiskStats
-	duEntries := s.cachedData.DuEntries
-
-	topicDiskUsage := make(map[string]int64)
-	partitionDiskUsage := make(map[string]map[string]int64)
-
-	kafkaDataPathPrefix := "/usrdata/redpanda/data/kafka/"
-	if s.cachedData.RedpandaDataDir != "" {
-		kafkaDataPathPrefix = filepath.Join(s.cachedData.RedpandaDataDir, "kafka")
-		if !strings.HasSuffix(kafkaDataPathPrefix, "/") {
-			kafkaDataPathPrefix += "/"
-		}
-	}
-
-	// Auto-detect prefix if duEntries don't match the expected prefix
-	hasMatch := false
-	if len(duEntries) > 0 {
-		for _, entry := range duEntries {
-			if strings.HasPrefix(entry.Path, kafkaDataPathPrefix) {
-				hasMatch = true
-				break
-			}
-		}
-
-		if !hasMatch {
-			// Try to find a common pattern
-			for _, entry := range duEntries {
-				if idx := strings.Index(entry.Path, "/kafka/"); idx != -1 {
-					possiblePrefix := entry.Path[:idx+7]
-					kafkaDataPathPrefix = possiblePrefix
-					break
-				}
-			}
-		}
-	}
-
-	for _, entry := range duEntries {
-		relativePath := ""
-		if strings.HasPrefix(entry.Path, kafkaDataPathPrefix) {
-			relativePath = strings.TrimPrefix(entry.Path, kafkaDataPathPrefix)
-		} else if idx := strings.Index(entry.Path, "/data/kafka/"); idx != -1 {
-			relativePath = entry.Path[idx+12:]
-		}
-
-		if relativePath != "" {
-			parts := strings.Split(relativePath, "/")
-
-			if len(parts) >= 1 {
-				topicName := parts[0]
-				topicDiskUsage[topicName] += entry.Size
-
-				if len(parts) >= 2 {
-					partitionID := parts[1]
-					if _, ok := partitionDiskUsage[topicName]; !ok {
-						partitionDiskUsage[topicName] = make(map[string]int64)
-					}
-					partitionDiskUsage[topicName][partitionID] += entry.Size
-				}
-			}
-		}
-	}
-
-	var topicsDiskInfo []TopicDiskInfo
-	for topicName, totalSize := range topicDiskUsage {
-		topicsDiskInfo = append(topicsDiskInfo, TopicDiskInfo{
-			Name:       topicName,
-			TotalSize:  totalSize,
-			Partitions: partitionDiskUsage[topicName],
-		})
-	}
-	sort.Slice(topicsDiskInfo, func(i, j int) bool {
-		return topicsDiskInfo[i].Name < topicsDiskInfo[j].Name
-	})
-
-	type DiskPageData struct {
-		ResourceUsage  models.ResourceUsage
-		DataDiskStats  models.DiskStats
-		CacheDiskStats models.DiskStats
-		TopicsDiskInfo []TopicDiskInfo
-		NodeHostname   string
-		Sessions       map[string]*BundleSession
-		ActivePath     string
-		LogsOnly       bool
-	}
-
-	pageData := DiskPageData{
-		ResourceUsage:  resourceUsage,
-		DataDiskStats:  dataDiskStats,
-		CacheDiskStats: cacheDiskStats,
-		TopicsDiskInfo: topicsDiskInfo,
-		NodeHostname:   s.nodeHostname,
-		Sessions:       s.sessions,
-		ActivePath:     s.activePath,
-		LogsOnly:       s.logsOnly,
-	}
-
-	buf := builderPool.Get().(*strings.Builder)
-	buf.Reset()
-	defer builderPool.Put(buf)
-
-	buf.Grow(8192)
-
-	err := s.diskTemplate.Execute(buf, pageData)
-	if err != nil {
-		http.Error(w, "Failed to execute disk template", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	if _, err := io.WriteString(w, buf.String()); err != nil {
-		s.logger.Error("Failed to write disk overview response", "error", err)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.logger.Error("Failed to encode metric data", "error", err)
 	}
 }

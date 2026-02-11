@@ -86,6 +86,13 @@ func formatBytes(b float64) string {
 	}
 }
 
+func percent(value, total float64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return (value / total) * 100
+}
+
 // Helper function to traverse JSON path
 func traverseJSONPath(data interface{}, jsonPath string) interface{} {
 	if jsonPath == "" {

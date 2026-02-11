@@ -29,7 +29,7 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore,
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000&_journal_mode=WAL")
+	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -559,9 +559,16 @@ func (s *SQLiteStore) BulkInsertLogs(logEntries []*models.LogEntry) error {
 }
 
 func (s *SQLiteStore) InsertMetric(metric *models.PrometheusMetric, timestamp time.Time) error {
-	labelsJSON, err := json.Marshal(metric.Labels)
-	if err != nil {
-		return fmt.Errorf("failed to marshal labels to JSON: %w", err)
+	var labelsJSON []byte
+	var err error
+
+	if metric.LabelsJSON != "" {
+		labelsJSON = []byte(metric.LabelsJSON)
+	} else {
+		labelsJSON, err = json.Marshal(metric.Labels)
+		if err != nil {
+			return fmt.Errorf("failed to marshal labels to JSON: %w", err)
+		}
 	}
 
 	s.mu.Lock()
@@ -607,9 +614,16 @@ func (s *SQLiteStore) BulkInsertMetrics(metrics []*models.PrometheusMetric, time
 	}
 
 	for _, metric := range metrics {
-		labelsJSON, err := json.Marshal(metric.Labels)
-		if err != nil {
-			return fmt.Errorf("failed to marshal labels to JSON during bulk operation: %w", err)
+		var labelsJSON []byte
+		var err error
+
+		if metric.LabelsJSON != "" {
+			labelsJSON = []byte(metric.LabelsJSON)
+		} else {
+			labelsJSON, err = json.Marshal(metric.Labels)
+			if err != nil {
+				return fmt.Errorf("failed to marshal labels to JSON during bulk operation: %w", err)
+			}
 		}
 		_, err = stmt.Exec(metric.Name, labelsJSON, metric.Value, ts)
 		if err != nil {
@@ -915,6 +929,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		if ts != 0 {
 			logEntry.Timestamp = time.UnixMicro(ts).UTC()
 		}
+		logEntry.Insight = analysis.GetInsight(logEntry.Message)
 		logEntries = append(logEntries, &logEntry)
 	}
 
@@ -1048,6 +1063,7 @@ func (s *SQLiteStore) GetLogPatterns() ([]models.LogPattern, int, error) {
 			p.LastSeen = time.UnixMicro(lastSeen).UTC()
 		}
 		p.SampleEntry = models.LogEntry{Message: sampleMessage}
+		p.Insight = analysis.GetInsight(sampleMessage)
 		patterns = append(patterns, p)
 		totalLogs += p.Count
 	}
@@ -1059,20 +1075,31 @@ func (s *SQLiteStore) GetLogPatterns() ([]models.LogPattern, int, error) {
 	return patterns, totalLogs, nil
 }
 
-func (s *SQLiteStore) Optimize() error {
+func (s *SQLiteStore) Optimize(p *models.ProgressTracker) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	slog.Info("Running database optimizations...")
+	if p != nil {
+		p.SetStatus("Optimizing FTS5 index (merging segments)...")
+	}
 
 	// 1. Optimize FTS5 index (merges index segments)
 	if _, err := s.db.Exec("INSERT INTO logs_fts(logs_fts) VALUES('optimize')"); err != nil {
 		slog.Warn("Failed to optimize FTS5 index", "error", err)
 	}
 
+	if p != nil {
+		p.SetStatus("Analyzing database statistics...")
+	}
+
 	// 2. Run ANALYZE to update query planner statistics
 	if _, err := s.db.Exec("ANALYZE"); err != nil {
 		slog.Warn("Failed to run ANALYZE", "error", err)
+	}
+
+	if p != nil {
+		p.SetStatus("Vacuuming database (reclaiming space)...")
 	}
 
 	// 3. Run VACUUM to reclaim space and defragment the database
@@ -1084,6 +1111,12 @@ func (s *SQLiteStore) Optimize() error {
 
 	slog.Info("Database optimizations complete")
 	return nil
+}
+
+func (s *SQLiteStore) Query(query string, args ...interface{}) (*sql.Rows, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.db.Query(query, args...)
 }
 
 func (s *SQLiteStore) Close() error {

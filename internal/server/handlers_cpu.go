@@ -195,12 +195,14 @@ func (s *Server) apiCpuBinaryStatusHandler(w http.ResponseWriter, r *http.Reques
 	_, err = os.Stat(path)
 	exists := err == nil
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"exists":  exists,
 		"path":    path,
 		"version": version,
 		"arch":    arch,
-	})
+	}); err != nil {
+		s.logger.Error("Failed to encode cpu binary status", "error", err)
+	}
 }
 
 func (s *Server) apiCpuDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -222,8 +224,10 @@ func (s *Server) apiCpuDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ok",
 		"path":   path,
-	})
+	}); err != nil {
+		s.logger.Error("Failed to encode cpu download response", "error", err)
+	}
 }

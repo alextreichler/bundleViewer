@@ -92,6 +92,7 @@ func AnalyzeLogs(logs []*models.LogEntry) []models.LogPattern {
 				SampleEntry: *entry,
 				FirstSeen:   entry.Timestamp,
 				LastSeen:    entry.Timestamp,
+				Insight:     GetInsight(entry.Message),
 			}
 		}
 

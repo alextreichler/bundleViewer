@@ -3,6 +3,7 @@
 <head>
     <title>Partition Skew Analysis</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/disk_viz.css">
     <script src="/static/theme.js"></script>
     <script src="/static/tables.js"></script>
     <style>
@@ -44,33 +45,25 @@
             color: var(--text-color-light);
             margin-top: 5px;
         }
-
-        .bar-container {
-            display: flex;
-            align-items: center;
-            height: 20px;
-            background-color: var(--border-color);
-            border-radius: 4px;
-            overflow: hidden;
-            width: 100px;
+        
+        .alert-box {
+            background-color: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #ef9a9a;
+            margin-bottom: 20px;
         }
-
-        .bar-fill {
-            height: 100%;
-            background-color: var(--link-color);
-        }
-
-        .bar-fill.skewed {
-            background-color: #fbc02d;
-        }
-
-        .bar-fill.critically-skewed {
-            background-color: #d32f2f;
+        
+        .alert-box strong {
+            font-size: 1.1em;
+            display: block;
+            margin-bottom: 5px;
         }
 
         .config-grid {
             display: grid;
-            grid-template-columns: 250px 1fr;
+            grid-template-columns: 350px 1fr;
             gap: 10px;
         }
 
@@ -78,13 +71,28 @@
             font-weight: bold;
             color: var(--text-color-light);
         }
+        
+        .node-badge {
+            display: inline-block;
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px 6px;
+            margin: 2px;
+            font-size: 0.9em;
+        }
     </style>
 </head>
 <body>
-	
-	</div>
     {{template "nav" (dict "Active" "Skew" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
 	<h1>Skew Analysis</h1>
+
+    {{if .Analysis.IsClusterSkewed}}
+    <div class="alert-box">
+        <strong>⚠️ Cluster Imbalance Detected</strong>
+        {{.Analysis.ClusterSkewHint}}
+    </div>
+    {{end}}
 
     <div class="skew-card">
         <h3>Cluster Summary</h3>
@@ -106,7 +114,150 @@
                 <div class="stat-label">Standard Deviation</div>
             </div>
         </div>
+        
+        <h4>Balancer Status</h4>
+        <div class="config-grid">
+            <div class="config-label">Status:</div>
+            <div>{{.Analysis.BalancerStatus.Status}}</div>
+            
+            <div class="config-label">Seconds Since Last Tick:</div>
+            <div>{{.Analysis.BalancerStatus.SecondsSinceLastTick}}</div>
+            
+            <div class="config-label">Violations:</div>
+            <div>
+                {{if .Analysis.BalancerStatus.Violations}}
+                    {{len .Analysis.BalancerStatus.Violations}} violations
+                {{else}}
+                    None
+                {{end}}
+            </div>
+        </div>
     </div>
+
+    {{if .Analysis.Balancing.NodeDiskMap}}
+    <div class="skew-card">
+        <h3>Disk Usage & Balancing Targets</h3>
+        
+        <div style="background-color: var(--bg-color); padding: 15px; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 20px;">
+            <h4 style="margin-top: 0; font-size: 1rem;">Understanding Redpanda's "Effective" Capacity</h4>
+            <p style="font-size: 0.9rem; color: var(--text-color-muted); margin-bottom: 10px;">
+                Redpanda calculates available space by applying multiple reductions ("stacked penalties") to your physical disk size.
+            </p>
+            <ol style="font-size: 0.9rem; padding-left: 20px; color: var(--text-color);">
+                <li><strong>Physical Disk:</strong> The raw size of your volume.</li>
+                <li><strong>Minus Reservation ({{.Analysis.Balancing.DiskConfig.DiskReservationPercent}}%):</strong> Space reserved for OS and logs. <em>(Redpanda ignores this space)</em></li>
+                <li><strong>Minus Retention Target ({{.Analysis.Balancing.DiskConfig.RetentionLocalTargetCapacityPercent}}% of Usable):</strong> The "Effective Total" Redpanda targets for data.</li>
+                <li><strong>Rebalance Trigger ({{.Analysis.Balancing.DiskConfig.PartitionAutobalancingMaxDiskUsagePercent}}% of Target):</strong> The actual point where Redpanda starts moving data off the node.</li>
+            </ol>
+        </div>
+
+        <div class="legend-container">
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: var(--primary-color);"></div>
+                <span>Used Data</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #f59e0b;"></div>
+                <span>Rebalance Trigger</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #ef4444;"></div>
+                <span>Retention Target</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 5px, #94a3b8 5px, #94a3b8 10px);"></div>
+                <span>Reserved (OS/Overhead)</span>
+            </div>
+        </div>
+
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Node ID</th>
+                    <th>Physical Size</th>
+                    <th>Used</th>
+                    <th>Headroom</th>
+                    <th style="width: 300px;">Visualization (Physical Disk)</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $nodeID, $disk := .Analysis.Balancing.NodeDiskMap}}
+                <tr>
+                    <td>{{$nodeID}}</td>
+                    <td>{{formatBytes $disk.TotalBytes}}</td>
+                    <td>
+                        <div>{{formatBytes $disk.UsedBytes}}</div>
+                        <div style="font-size: 0.8em; color: var(--text-color-muted);">{{printf "%.1f" (percent $disk.UsedBytes $disk.TotalBytes)}}% of Physical</div>
+                    </td>
+                    <td class="{{if lt $disk.AvailableToRebalance 0}}skew-positive{{end}}">
+                        <div>{{if lt $disk.AvailableToRebalance 0}}-{{end}}{{formatBytes (abs $disk.AvailableToRebalance)}}</div>
+                        <div style="font-size: 0.8em; color: var(--text-color-muted);">to Trigger</div>
+                    </td>
+                    <td>
+                        <div class="disk-usage-bar-container">
+                            <!-- Used Data -->
+                            <div class="disk-usage-bar-used" style="width: {{percent $disk.UsedBytes $disk.TotalBytes}}%;"></div>
+                            
+                            <!-- Rebalance Trigger Marker -->
+                            <div class="disk-usage-bar-trigger" style="left: {{percent $disk.RebalanceThreshold $disk.TotalBytes}}%;" title="Trigger: {{formatBytes $disk.RebalanceThreshold}}"></div>
+                            
+                            <!-- Retention Target Marker -->
+                            <div class="disk-usage-bar-target" style="left: {{percent $disk.TargetBytes $disk.TotalBytes}}%;" title="Target: {{formatBytes $disk.TargetBytes}}"></div>
+                            
+                            <!-- Reserved Space (Right aligned) -->
+                            <div class="disk-usage-bar-reserved" style="width: {{percent $disk.ReservedBytes $disk.TotalBytes}}%;" title="Reserved: {{formatBytes $disk.ReservedBytes}}"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.7em; color: var(--text-color-muted); margin-top: 2px;">
+                            <span>0%</span>
+                            <span>Trigger: {{formatBytes $disk.RebalanceThreshold}}</span>
+                            <span>100%</span>
+                        </div>
+                    </td>
+                    <td>
+                        {{if $disk.IsFull}}<span class="badge" style="background-color: #fee2e2; color: #991b1b;">Full</span>
+                        {{else if $disk.IsRebalancingTriggered}}<span class="badge" style="background-color: #fef08a; color: #854d0e;">Rebalancing</span>
+                        {{else}}<span class="badge" style="background-color: #dcfce7; color: #166534;">OK</span>{{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+
+    {{if .Analysis.HotTopics}}
+    <div class="card mb-4">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0">🔥 Hot Topics (Throughput Outliers)</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">These topics have significantly higher throughput (> 2 standard deviations) than the cluster average.</p>
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th>Topic</th>
+                            <th>Throughput (Approx)</th>
+                            <th>Deviation</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Analysis.HotTopics}}
+                        <tr>
+                            <td class="fw-bold">{{.TopicName}}</td>
+                            <td>{{formatBytes .BytesValue}}</td>
+                            <td>{{printf "%.2f" .Deviation}}x σ</td>
+                            <td><span class="badge bg-danger">HOT</span></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {{end}}
 
     <div class="skew-card">
         <h3>Node Balance</h3>
@@ -118,6 +269,7 @@
                     <th>Node ID</th>
                     <th>Partition Count</th>
                     <th>Topic Count</th>
+                    <th>Core Count</th>
                     <th>Deviation from Mean</th>
                     <th>Skew %</th>
                     <th>Status</th>
@@ -130,6 +282,14 @@
                     <td>{{$nodeSkew.NodeID}}</td>
                     <td>{{$nodeSkew.PartitionCount}}</td>
                     <td>{{$nodeSkew.TopicCount}}</td>
+                    <td>
+                        {{$nodeSkew.CoreCount}}
+                        {{if gt $nodeSkew.SMPCount 0}}
+                            <div style="font-size: 0.8em; color: var(--text-color-muted);" title="Configured via --smp">
+                                (Limit: {{$nodeSkew.SMPCount}})
+                            </div>
+                        {{end}}
+                    </td>
                     <td>
                         {{if gt $nodeSkew.Deviation 0.0}}+{{end}}{{printf "%.2f" $nodeSkew.Deviation}} σ
                     </td>
@@ -153,6 +313,92 @@
             </tbody>
         </table>
     </div>
+    
+    {{if .Analysis.RackSkews}}
+    <div class="skew-card">
+        <h3>Rack Analysis (Intra-Rack Skew)</h3>
+        <p>Checks if replicas are evenly distributed among nodes within the same rack.</p>
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Rack ID</th>
+                    <th>Nodes</th>
+                    <th>Total Partitions</th>
+                    <th>Status</th>
+                    <th>Distribution (Node: Count)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Analysis.RackSkews}}
+                <tr>
+                    <td>{{.RackID}}</td>
+                    <td>{{.NodeCount}}</td>
+                    <td>{{.PartitionCount}}</td>
+                    <td>
+                        {{if .Skewed}}
+                            <span class="skew-positive">Imbalanced</span>
+                        {{else}}
+                            Balanced
+                        {{end}}
+                    </td>
+                    <td>
+                        {{range $nodeID, $count := .NodeDistribution}}
+                            <span class="node-badge">
+                                Node {{$nodeID}}: <b>{{$count}}</b>
+                            </span>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+    
+    {{if .Analysis.ConstraintChecks}}
+    <div class="skew-card">
+        <h3>Constraint Checks (Under-loaded Nodes)</h3>
+        <p>Analyzing why under-loaded nodes might not be accepting more partitions.</p>
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Node ID</th>
+                    <th>Target Status</th>
+                    <th>Disk Usage</th>
+                    <th>State</th>
+                    <th>Blockers</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Analysis.ConstraintChecks}}
+                <tr>
+                    <td>{{.NodeID}}</td>
+                    <td>
+                        {{if .IsValidTarget}}
+                            <span style="color: green">Valid Target</span>
+                        {{else}}
+                            <span style="color: red">Blocked</span>
+                        {{end}}
+                    </td>
+                    <td>{{printf "%.1f" .DiskUsagePct}}%</td>
+                    <td>
+                        {{if .IsDraining}}Draining{{else if not .IsAlive}}Dead{{else}}Active{{end}}
+                    </td>
+                    <td>
+                        {{if .BlockerReasons}}
+                            {{range .BlockerReasons}}
+                                <div style="color: #d32f2f;">• {{.}}</div>
+                            {{end}}
+                        {{else}}
+                            None
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
 
     {{if .Analysis.TopicSkews}}
     <div class="skew-card">
@@ -162,7 +408,7 @@
             <thead>
                 <tr>
                     <th>Topic Name</th>
-                    <th>Total Replicas</th>
+                    <th>Partitions</th>
                     <th>Max Skew %</th>
                     <th>Node Distribution (Node: Count)</th>
                 </tr>
@@ -205,30 +451,6 @@
             <div>{{.Analysis.Balancing.Config.PartitionsReserveShard0}}</div>
         </div>
         <p style="margin-top: 15px;">A lower balancing score is better. A move is only triggered if a destination node has a lower score than the source.</p>
-    </div>
-
-    <div class="skew-card">
-        <h3>Node Balancing Scores</h3>
-         <table class="sortable-table">
-            <thead>
-                <tr>
-                    <th>Node ID</th>
-                    <th>CPU Cores</th>
-                    <th>Max Capacity</th>
-                    <th>Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {{range .Analysis.Balancing.Nodes}}
-                <tr>
-                    <td>{{.NodeID}}</td>
-                    <td>{{.CPU}}</td>
-                    <td>{{.MaxCapacity}}</td>
-                    <td>{{printf "%.8f" .Score}}</td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
     </div>
 
     <div class="skew-card">

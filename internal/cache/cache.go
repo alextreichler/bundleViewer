@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alextreichler/bundleViewer/internal/analysis"
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/parser"
 	"github.com/alextreichler/bundleViewer/internal/store"
@@ -25,8 +27,8 @@ type CachedData struct {
 	ConsumerGroups    map[string]models.ConsumerGroup
 	HealthOverview    models.HealthOverview
 	ResourceUsage     models.ResourceUsage
-	DataDiskStats     models.DiskStats
-	CacheDiskStats    models.DiskStats
+	DataDiskStats     map[int]models.DiskStats
+	CacheDiskStats    map[int]models.DiskStats
 	DuEntries         []models.DuEntry
 	K8sStore          models.K8sStore
 	RedpandaDataDir   string
@@ -39,6 +41,8 @@ type CachedData struct {
 	Store             store.Store
 	CoreDumps         []string
 	LogsOnly          bool
+	StorageAnalysis   *models.StorageAnalysis
+	TopicThroughput   map[string]float64
 }
 
 func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTracker) (*CachedData, error) {
@@ -70,9 +74,10 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 	var consumerGroupsData map[string]models.ConsumerGroup
 	var healthOverviewData models.HealthOverview
 	var resourceUsageData models.ResourceUsage
-	var dataDiskStatsData models.DiskStats
-	var cacheDiskStatsData models.DiskStats
+	var dataDiskStatsData = make(map[int]models.DiskStats)
+	var cacheDiskStatsData = make(map[int]models.DiskStats)
 	var duEntriesData []models.DuEntry
+	var storageAnalysisData *models.StorageAnalysis
 	var k8sStoreData models.K8sStore
 	var redpandaDataDir string
 	var systemData models.SystemState
@@ -80,6 +85,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 	var metricDefinitionsData map[string]string
 	var redpandaConfig map[string]interface{}
 	var partitionBalancerData models.PartitionBalancerStatus
+	var topicThroughput map[string]float64
 
 	// Define tasks
 	tasks := []struct {
@@ -90,7 +96,11 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 			name: "SAR data",
 			fn: func() {
 				p.Update(0, "Parsing SAR data...")
-				sarData, _ = parser.ParseSar(bundlePath, logsOnly)
+				var err error
+				sarData, err = parser.ParseSar(bundlePath, logsOnly)
+				if err != nil {
+					slog.Warn("Failed to parse SAR data", "error", err)
+				}
 				p.Update(1, "SAR data parsed")
 			},
 		},
@@ -116,6 +126,8 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				syslog, _ := parser.ParseSyslog(bundlePath)
 				vmStatTS, _ := parser.ParseVMStatTimeSeries(bundlePath)
 				lspci, _ := parser.ParseLSPCI(bundlePath)
+				thp, _ := parser.ParseTHP(bundlePath)
+				interrupts, _ := parser.ParseInterrupts(bundlePath)
 
 				connSummary := models.ConnectionSummary{
 					Total:   len(conns),
@@ -146,6 +158,8 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 					VMStatAnalysis: vmStatTS, LSPCI: lspci, CPU: cpuInfo, Sysctl: sysctl,
 					NTP: ntp, Interfaces: ips, Connections: conns, ConnSummary: connSummary,
 					VMStat: vmStat, MDStat: mdStat, CmdLine: cmdLine, CoreCount: coreCount,
+					TransparentHugePages: thp,
+					Interrupts: interrupts,
 				}
 				p.Update(1, "System state parsed")
 			},
@@ -167,18 +181,59 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 					}
 				}
 				metricDefinitionsData = make(map[string]string)
+				topicThroughput = make(map[string]float64) // Initialize outer variable
+				
 				if len(metricsFiles) > 0 {
 					if defs, err := parser.ParseMetricDefinitions(metricsFiles[0]); err == nil {
 						for k, v := range defs {
 							metricDefinitionsData[k] = v
 						}
 					}
+
+					const maxMetricFileSize = 500 * 1024 * 1024 // 500MB limit
+
 					for _, file := range metricsFiles {
+						fi, err := os.Stat(file)
+						if err == nil {
+							if fi.Size() > maxMetricFileSize {
+								continue
+							}
+						}
+
 						metricTimestamp := time.Now()
-						if fi, err := os.Stat(file); err == nil {
+						if err == nil {
 							metricTimestamp = fi.ModTime()
 						}
-						_ = parser.ParsePrometheusMetrics(file, nil, s, metricTimestamp)
+						
+						// Create a temporary store capture to get metrics for throughput calculation
+						// We can't easily hook into ParsePrometheusMetrics without changing its signature significantly
+						// OR we can rely on the Store. 
+						// BETTER APPROACH: Since we already parse them into the DB, let's just query the DB 
+						// for this specific aggregation *after* this loop if possible?
+						// Actually, `s.BulkInsertMetrics` puts them in DB. 
+						// Let's query the DB for the aggregation in a separate step or just do it here if we want to parse twice (bad).
+						
+						// Alternative: The cache *has* the store. We can just run a query at the end of this block.
+						if err := parser.ParsePrometheusMetrics(file, nil, s, metricTimestamp); err != nil {
+							slog.Warn("Failed to parse prometheus metrics", "file", file, "error", err)
+						}
+					}
+
+					// Now query the store for per-topic throughput
+					// We want SUM(value) of vectorized_storage_log_written_bytes GROUP BY label->>topic
+					// Note: This relies on the store having JSON support for labels
+					if sqlite, ok := s.(*store.SQLiteStore); ok {
+						rows, err := sqlite.Query("SELECT json_extract(labels, '$.topic') as topic, SUM(value) FROM metrics WHERE name='vectorized_storage_log_written_bytes' GROUP BY topic")
+						if err == nil {
+							defer rows.Close()
+							for rows.Next() {
+								var topic string
+								var val float64
+								if err := rows.Scan(&topic, &val); err == nil && topic != "" {
+									topicThroughput[topic] = val
+								}
+							}
+						}
 					}
 				}
 				p.Update(1, "Prometheus metrics parsed")
@@ -188,19 +243,28 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 			name: "Log ingestion",
 			fn: func() {
 				p.Update(0, "Ingesting logs into SQLite...")
-				hasLogs, _ := s.HasLogs()
+				hasLogs, err := s.HasLogs()
+				if err != nil {
+					slog.Warn("Failed to check if logs exist in store", "error", err)
+				}
 				if !hasLogs {
 					// Optimization: Drop indexes for faster bulk insert
 					if sqlite, ok := s.(*store.SQLiteStore); ok {
-						_ = sqlite.DropIndexes()
+						if err := sqlite.DropIndexes(); err != nil {
+							slog.Warn("Failed to drop indexes for bulk insert", "error", err)
+						}
 					}
 
-					_ = parser.ParseLogs(bundlePath, s, logsOnly, p)
+					if err := parser.ParseLogs(bundlePath, s, logsOnly, p); err != nil {
+						slog.Warn("Failed to parse logs", "error", err)
+					}
 
 					// Restore indexes and rebuild FTS
 					if sqlite, ok := s.(*store.SQLiteStore); ok {
 						p.SetStatus("Restoring indexes (this may take a minute)...")
-						_ = sqlite.RestoreIndexes()
+						if err := sqlite.RestoreIndexes(); err != nil {
+							slog.Warn("Failed to restore indexes after bulk insert", "error", err)
+						}
 					}
 				}
 				p.Update(1, "Logs ingested")
@@ -231,21 +295,33 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 			name: "Kubernetes resources",
 			fn: func() {
 				p.Update(0, "Parsing Kubernetes resources...")
-				k8sStoreData, _ = parser.ParseK8sResources(bundlePath, logsOnly, s)
+				var err error
+				k8sStoreData, err = parser.ParseK8sResources(bundlePath, logsOnly, s)
+				if err != nil {
+					slog.Warn("Failed to parse K8s resources", "error", err)
+				}
 				p.Update(1, "Kubernetes resources parsed")
 			},
 		},
 		{
 			name: "Partitions",
 			fn: func() {
-				partitions, _ = parser.ParseClusterPartitions(bundlePath)
+				var err error
+				partitions, err = parser.ParseClusterPartitions(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to parse cluster partitions", "error", err)
+				}
 				p.Update(1, "Partition metadata parsed")
 			},
 		},
 		{
 			name: "Partition leaders",
 			fn: func() {
-				leaders, _ = parser.ParsePartitionLeaders(bundlePath, logsOnly)
+				var err error
+				leaders, err = parser.ParsePartitionLeaders(bundlePath, logsOnly)
+				if err != nil {
+					slog.Warn("Failed to parse partition leaders", "error", err)
+				}
 				p.Update(1, "Leader metadata parsed")
 			},
 		},
@@ -253,7 +329,10 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 			name: "Kafka metadata",
 			fn: func() {
 				p.Update(0, "Parsing Kafka metadata, configs, and groups...")
-				fullData, _ := parser.ParseKafkaJSON(bundlePath)
+				fullData, err := parser.ParseKafkaJSON(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to parse Kafka JSON", "error", err)
+				}
 				kafkaMetadataData = fullData.Metadata
 				topicConfigsData = fullData.TopicConfigs
 				consumerGroupsData = fullData.ConsumerGroups
@@ -263,7 +342,11 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 		{
 			name: "Health overview",
 			fn: func() {
-				healthOverviewData, _ = parser.ParseHealthOverview(bundlePath)
+				var err error
+				healthOverviewData, err = parser.ParseHealthOverview(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to parse health overview", "error", err)
+				}
 				p.Update(1, "Health overview parsed")
 			},
 		},
@@ -272,7 +355,9 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 			fn: func() {
 				resourceUsageFile := filepath.Join(bundlePath, "resource-usage.json")
 				if data, err := os.ReadFile(resourceUsageFile); err == nil {
-					_ = json.Unmarshal(data, &resourceUsageData)
+					if err := json.Unmarshal(data, &resourceUsageData); err != nil {
+						slog.Warn("Failed to unmarshal resource usage", "error", err)
+					}
 				}
 				p.Update(1, "Resource usage parsed")
 			},
@@ -283,37 +368,34 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				p.Update(0, "Parsing CPU profiles...")
 				profiles, err := parser.ParseCpuProfiles(bundlePath)
 				if err == nil && len(profiles) > 0 {
-					_ = s.BulkInsertCpuProfiles(profiles)
+					if err := s.BulkInsertCpuProfiles(profiles); err != nil {
+						slog.Warn("Failed to bulk insert CPU profiles", "error", err)
+					}
+				} else if err != nil {
+					slog.Warn("Failed to parse CPU profiles", "error", err)
 				}
 				p.Update(1, "CPU profiles parsed")
 			},
 		},
 		{
-			name: "Data disk stats",
+			name: "Storage Analysis",
 			fn: func() {
-				if len(dataDiskFiles) > 0 {
-					if data, err := os.ReadFile(dataDiskFiles[0]); err == nil {
-						_ = json.Unmarshal(data, &dataDiskStatsData)
-					}
+				var err error
+				storageAnalysisData, err = analysis.AnalyzeStorage(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to analyze storage", "error", err)
 				}
-				p.Update(1, "Data disk stats parsed")
-			},
-		},
-		{
-			name: "Cache disk stats",
-			fn: func() {
-				if len(cacheDiskFiles) > 0 {
-					if data, err := os.ReadFile(cacheDiskFiles[0]); err == nil {
-						_ = json.Unmarshal(data, &cacheDiskStatsData)
-					}
-				}
-				p.Update(1, "Cache disk stats parsed")
+				p.Update(1, "Storage analysis completed")
 			},
 		},
 		{
 			name: "Disk usage (DU)",
 			fn: func() {
-				duEntriesData, _ = parser.ParseDuOutput(bundlePath, logsOnly)
+				var err error
+				duEntriesData, err = parser.ParseDuOutput(bundlePath, logsOnly)
+				if err != nil {
+					slog.Warn("Failed to parse DU output", "error", err)
+				}
 				p.Update(1, "Disk usage (DU) parsed")
 			},
 		},
@@ -371,9 +453,83 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 
 	wg.Wait()
 
-	p.SetStatus("Optimizing database and building indexes...")
-	_ = s.Optimize()
+	if err := s.Optimize(p); err != nil {
+		slog.Warn("Failed to optimize database", "error", err)
+	}
 	p.Update(1, "Database optimized")
+
+	// Post-process: Map disk stats to nodes using brokers.json
+	hostToNodeID := make(map[string]int)
+	for _, file := range adminFiles {
+		if file.FileName == "brokers.json" {
+			if data, ok := file.Data.(string); ok {
+				// Should be []interface{} but parser might return string if generic parse
+				var brokers []interface{}
+				if err := json.Unmarshal([]byte(data), &brokers); err == nil {
+					for _, b := range brokers {
+						if bMap, ok := b.(map[string]interface{}); ok {
+							if id, ok := bMap["node_id"].(float64); ok {
+								if addr, ok := bMap["internal_rpc_address"].(string); ok {
+									hostToNodeID[addr] = int(id)
+								}
+							}
+						}
+					}
+				}
+			} else if data, ok := file.Data.([]interface{}); ok {
+				// Already parsed as JSON
+				for _, b := range data {
+					if bMap, ok := b.(map[string]interface{}); ok {
+						if id, ok := bMap["node_id"].(float64); ok {
+							if addr, ok := bMap["internal_rpc_address"].(string); ok {
+								hostToNodeID[addr] = int(id)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Process disk stats from admin files
+	for _, file := range adminFiles {
+		var targetMap map[int]models.DiskStats
+		if strings.HasPrefix(file.FileName, "disk_stat_data_") {
+			targetMap = dataDiskStatsData
+		} else if strings.HasPrefix(file.FileName, "disk_stat_cache_") {
+			targetMap = cacheDiskStatsData
+		} else {
+			continue
+		}
+
+		// Parse stats
+		var stats models.DiskStats
+		var err error
+		if sData, ok := file.Data.(string); ok {
+			err = json.Unmarshal([]byte(sData), &stats)
+		} else if mapData, ok := file.Data.(map[string]interface{}); ok {
+			// Convert map to struct manually or re-marshal
+			b, _ := json.Marshal(mapData)
+			err = json.Unmarshal(b, &stats)
+		}
+
+		if err == nil {
+			// Match filename to node
+			// Filename: disk_stat_data_<hostname>-<port>.json or similar
+			// Hostname might strictly match internal_rpc_address
+
+			// Brute force check against known hosts
+			for host, id := range hostToNodeID {
+				if strings.Contains(file.FileName, host) {
+					targetMap[id] = stats
+					break
+				}
+			}
+
+			// Fallback: Try to find NodeID in filename directly?
+			// No, bundle filenames are messy. Relying on brokers.json is best.
+		}
+	}
 
 	sort.Slice(adminFiles, func(i, j int) bool { return adminFiles[i].FileName < adminFiles[j].FileName })
 	sort.Slice(utilsFiles, func(i, j int) bool { return utilsFiles[i].FileName < utilsFiles[j].FileName })
@@ -405,5 +561,6 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 		K8sStore: k8sStoreData, RedpandaDataDir: redpandaDataDir, RedpandaConfig: redpandaConfig, PartitionBalancer: partitionBalancerData,
 		MetricDefinitions: metricDefinitionsData, System: systemData, SarData: sarData,
 		TopicDetails: topicDetails, Store: s, CoreDumps: coreDumps, LogsOnly: logsOnly,
+		StorageAnalysis: storageAnalysisData, TopicThroughput: topicThroughput,
 	}, nil
 }

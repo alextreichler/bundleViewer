@@ -1,69 +1,87 @@
-<h3>File: {{.FilePath}}</h3>
-<p><strong>Size:</strong> {{formatBytes .SizeBytes}}</p>
-{{if .Error}}
-<div class="alert alert-danger">
-    <strong>Error:</strong> {{.Error}}
-</div>
-{{end}}
+<div class="container-fluid mt-4">
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+                <i class="bi bi-file-earmark-binary me-2"></i> {{.FileName}}
+            </h5>
+            <span class="badge bg-secondary">{{.Type}}</span>
+        </div>
+        <div class="card-body">
+            {{if .Error}}
+            <div class="alert alert-warning" role="alert">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i> {{.Error}}
+            </div>
+            {{end}}
 
-{{if .Snapshot}}
-<div class="card" style="margin-bottom: 20px;">
-    <h3>Raft Snapshot Header</h3>
-    <div class="stat-row">
-        <span class="stat-label">Last Included Index</span>
-        <span class="stat-value">{{.Snapshot.LastIncludedIndex}}</span>
-    </div>
-    <div class="stat-row">
-        <span class="stat-label">Last Included Term</span>
-        <span class="stat-value">{{.Snapshot.LastIncludedTerm}}</span>
-    </div>
-    <div class="stat-row">
-        <span class="stat-label">Metadata Size</span>
-        <span class="stat-value">{{.Snapshot.MetadataSize}} bytes</span>
-    </div>
-    <div class="stat-row">
-        <span class="stat-label">Version</span>
-        <span class="stat-value">{{.Snapshot.HeaderVersion}}</span>
-    </div>
-    <div class="stat-row">
-        <span class="stat-label">Header CRC</span>
-        <span class="stat-value" style="font-family: monospace;">{{printf "%x" .Snapshot.HeaderCRC}}</span>
-    </div>
-</div>
-{{else}}
-<p>Found {{len .Batches}} batches.</p>
+            {{if eq .Type "Segment"}}
+                {{$seg := .Data}}
+                <div class="row mb-3">
+                    <div class="col-md-3"><strong>Size:</strong> {{formatBytes $seg.SizeBytes}}</div>
+                    <div class="col-md-3"><strong>Batches:</strong> {{len $seg.Batches}}</div>
+                    <div class="col-md-3"><strong>Base Offset:</strong> {{$seg.BaseOffset}}</div>
+                </div>
 
-<table class="sortable-table">
-    <thead>
-        <tr>
-            <th>Offset (Base/Max)</th>
-            <th>Timestamp (Max)</th>
-            <th>Type</th>
-            <th>Batch Size</th>
-            <th>Records</th>
-            <th>Compress</th>
-            <th>CRC</th>
-        </tr>
-    </thead>
-    <tbody>
-        {{range .Batches}}
-        <tr>
-            <td style="font-family: monospace;">{{.BaseOffset}} / {{.MaxOffset}}</td>
-            <td>{{.Timestamp.Format "2006-01-02 15:04:05.000"}}</td>
-            <td>
-                {{.TypeString}}
-                {{if .RaftConfig}}
-                <div style="font-size: 0.8em; color: var(--text-color-light); margin-top: 4px;">
-                    <strong>Nodes:</strong> {{range .RaftConfig.Voters}}{{.}}, {{end}}
+                {{if $seg.Batches}}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover font-monospace" style="font-size: 0.85rem;">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Offset</th>
+                                <th>Type</th>
+                                <th>Timestamp</th>
+                                <th>Records</th>
+                                <th>Size</th>
+                                <th>Comp</th>
+                                <th>CRC</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range $seg.Batches}}
+                            <tr>
+                                <td>{{.BaseOffset}}</td>
+                                <td>
+                                    <span class="badge {{if eq .TypeString "Raft Data"}}bg-primary{{else if eq .TypeString "Raft Config"}}bg-info{{else}}bg-secondary{{end}}">
+                                        {{.TypeString}}
+                                    </span>
+                                </td>
+                                <td>{{.Timestamp.Format "15:04:05.000"}}</td>
+                                <td>{{.RecordCount}}</td>
+                                <td>{{.BatchLength}}</td>
+                                <td>{{.CompressionType}}</td>
+                                <td>{{printf "%x" .CRC}}</td>
+                                <td>
+                                    {{if .RaftConfig}}
+                                        <small><strong>Config:</strong> Voters: {{.RaftConfig.Voters}}</small>
+                                    {{else if eq .TypeString "Raft Data"}}
+                                        <span class="text-muted">Data Batch</span>
+                                    {{end}}
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+                {{else}}
+                    <p class="text-muted text-center py-4">No batches found or parse error.</p>
+                {{end}}
+
+            {{else if eq .Type "Snapshot"}}
+                {{$snap := .Data.Snapshot}}
+                {{if $snap}}
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-bordered">
+                            <tr><th>Version</th><td>{{$snap.HeaderVersion}}</td></tr>
+                            <tr><th>Last Included Index</th><td>{{$snap.LastIncludedIndex}}</td></tr>
+                            <tr><th>Last Included Term</th><td>{{$snap.LastIncludedTerm}}</td></tr>
+                            <tr><th>Metadata Size</th><td>{{$snap.MetadataSize}} bytes</td></tr>
+                            <tr><th>Header CRC</th><td>{{printf "%x" $snap.HeaderCRC}}</td></tr>
+                        </table>
+                    </div>
                 </div>
                 {{end}}
-            </td>
-            <td>{{.BatchLength}}</td>
-            <td>{{.RecordCount}}</td>
-            <td>{{.CompressionType}}</td>
-            <td style="font-family: monospace;">{{printf "%x" .CRC}}</td>
-        </tr>
-        {{end}}
-    </tbody>
-</table>
-{{end}}
+            {{end}}
+        </div>
+    </div>
+</div>

@@ -85,5 +85,12 @@
         </tbody>
     </table>
 
+    <div style="margin-top: 40px; border: 1px solid #17a2b8; border-radius: 8px; padding: 20px; background-color: rgba(23, 162, 184, 0.05);">
+        <h3 style="color: #17a2b8; margin-top: 0;">ℹ️ Understanding Redpanda CPU & Threading</h3>
+        <p><strong>OS CPU vs. Reactor Utilization:</strong> Redpanda uses the Seastar framework, which eagerly polls for I/O (network/disk) even when idle. This causes the OS to report ~100% CPU usage. This is normal. The <em>Reactor Utilization</em> metric tracks actual useful work.</p>
+        <p><strong>Threaded Fallbacks:</strong> Most I/O is asynchronous (AIO), but some operations (like file metadata or retries) must use a fallback thread. High "Threaded Fallbacks" counts can indicate hidden latency sources.</p>
+        <p><strong>Stalls:</strong> A "stall" occurs when a task hogs the CPU for too long (>0.5ms quota), preventing other tasks (like heartbeats) from running. Long stalls (>25ms) are logged and can cause leadership loss.</p>
+    </div>
+
 </body>
 </html>

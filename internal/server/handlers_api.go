@@ -58,12 +58,16 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		// User likely cancelled or something went wrong
 		s.logger.Debug("Folder picker closed or failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"path": ""})
+		if err := json.NewEncoder(w).Encode(map[string]string{"path": ""}); err != nil {
+			s.logger.Error("Failed to encode response", "error", err)
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"path": path})
+	if err := json.NewEncoder(w).Encode(map[string]string{"path": path}); err != nil {
+		s.logger.Error("Failed to encode response", "error", err)
+	}
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {

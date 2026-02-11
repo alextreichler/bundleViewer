@@ -138,11 +138,20 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		"add": func(a, b int) int {
 			return a + b
 		},
+		"abs": func(a int64) int64 {
+			if a < 0 {
+				return -a
+			}
+			return a
+		},
 		"div": func(a, b float64) float64 {
 			if b == 0 {
 				return 0.0 // Avoid division by zero
 			}
 			return a / b
+		},
+		"percent": func(a, b int64) float64 {
+			return percent(float64(a), float64(b))
 		},
 		"pct": func(val, max int) int {
 			if max == 0 {
@@ -271,7 +280,7 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		return nil, fmt.Errorf("failed to parse segments template: %w", err)
 	}
 
-	segmentViewTemplate, err := template.New("segment_view.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/segment_view.tmpl") // No nav needed here? Actually it's an HTMX partial, usually. But if it's standalone... wait, segment_view is likely a partial.
+	segmentViewTemplate, err := template.New("segment_view.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/base.tmpl", "html/nav.tmpl", "html/segment_view.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse segment_view template: %w", err)
 	}
@@ -363,7 +372,8 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/skew", server.skewHandler)
 	mux.HandleFunc("/search", server.searchHandler)
 	mux.HandleFunc("/diagnostics", server.diagnosticsHandler)
-	mux.HandleFunc("/segments", server.segmentsHandler)
+	mux.HandleFunc("/segments", server.storageHandler) // Renamed from /storage
+	// mux.HandleFunc("/segments", server.segmentsHandler) // Removed undefined handler
 	mux.HandleFunc("/segments/view", server.segmentViewHandler)
 	mux.HandleFunc("/cpu", server.cpuProfilesHandler)
 	mux.HandleFunc("/api/cpu/profiles", server.apiCpuProfilesHandler)

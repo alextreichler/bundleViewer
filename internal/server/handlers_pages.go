@@ -69,7 +69,9 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		io.WriteString(w, buf.String())
+		if _, err := io.WriteString(w, buf.String()); err != nil {
+			s.logger.Error("Failed to write home response (setup)", "error", err)
+		}
 		return
 	}
 

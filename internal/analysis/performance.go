@@ -32,6 +32,14 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	maxReactorUtil := 0.0
 	var shardUtils []float64
 	
+	// Better CPU Analysis (Counters)
+	var cpuBusySeconds, cpuBusyMs float64
+	hasCpuCounters := false
+
+	// Stall & Fallback Metrics
+	var reactorStallsHistogram float64 // Just checking existence/count for now
+	var threadedFallbacks float64
+	
 	for _, m := range metrics.Files {
 		for _, metric := range m {
 			if metric.Name == "vectorized_reactor_utilization" {
@@ -39,13 +47,39 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 				if metric.Value > maxReactorUtil {
 					maxReactorUtil = metric.Value
 				}
+			} else if metric.Name == "redpanda_cpu_busy_seconds_total" {
+				// This is a counter, so we need to see if we have multiple samples to calc rate, 
+				// but for a snapshot, a high raw value just means uptime. 
+				// To properly use this in a static bundle viewer without time-series queries is hard.
+				// However, if we have multiple samples in the bundle, we might be able to calculate it.
+				// For now, let's just flag that we found it.
+				cpuBusySeconds += metric.Value
+				hasCpuCounters = true
+			} else if metric.Name == "vectorized_reactor_cpu_busy_ms" {
+				cpuBusyMs += metric.Value
+				hasCpuCounters = true
+			} else if metric.Name == "vectorized_reactor_stalls" {
+				reactorStallsHistogram += metric.Value
+			} else if metric.Name == "vectorized_reactor_threaded_fallbacks" {
+				threadedFallbacks += metric.Value
 			}
+		}
+	}
+
+	// NOTE: Ideally we would calculate utilization from the busy counters (rate(busy)/rate(uptime)),
+	// but in a single-snapshot bundle context, we rely on the pre-calculated gauge unless we have time-series data.
+	// If the gauge is high, we can check the counters for context if needed.
+	if hasCpuCounters {
+		if cpuBusySeconds > 0 {
+			report.Observations = append(report.Observations, fmt.Sprintf("System Info: Found high-resolution CPU busy counters (%.0fs total).", cpuBusySeconds))
+		} else if cpuBusyMs > 0 {
+			report.Observations = append(report.Observations, fmt.Sprintf("System Info: Found high-resolution CPU busy counters (%.0fms total).", cpuBusyMs))
 		}
 	}
 
 	if maxReactorUtil >= 100 {
 		report.IsCPUBound = true
-		report.Observations = append(report.Observations, fmt.Sprintf("Critical: Reactor Utilization at 100%%. Shard is likely falling behind (or eagerly polling). Check per-shard load."))
+		report.Observations = append(report.Observations, fmt.Sprintf("Critical: Reactor Utilization at 100%%. Shard is likely falling behind. Note: Seastar reactors poll eagerly, so 100%% OS CPU is normal; this metric tracks *useful* work."))
 	} else if maxReactorUtil > 95 {
 		report.IsCPUBound = true
 		report.Observations = append(report.Observations, fmt.Sprintf("Warning: High Reactor Utilization detected: %.2f%%. Risk of saturation.", maxReactorUtil))
@@ -258,6 +292,14 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 		if report.IsCPUBound {
 			report.Recommendations = append(report.Recommendations, "Stalls indicate tasks are hogging the reactor. Check for 'Reactor stalled' logs.")
 		}
+	}
+
+	if reactorStallsHistogram > 0 {
+		report.Observations = append(report.Observations, "Reactor Stall Histogram populated: Stalls > 1ms detected.")
+	}
+	
+	if threadedFallbacks > 0 {
+		report.Observations = append(report.Observations, fmt.Sprintf("Threaded Fallbacks: %.0f syscalls forced to fallback thread. May cause latency spikes not seen in disk queue metrics.", threadedFallbacks))
 	}
 
 	if taskQuotaViolationsMs > 1000 { // > 1 second total violation

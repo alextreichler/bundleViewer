@@ -712,3 +712,65 @@ html[data-theme="dark"] .multiselect-pill {
     margin: 0;
     cursor: pointer;
 }
+
+th.sortable-header {
+    position: relative;
+    padding-right: 20px; /* Space for arrow */
+}
+
+th.sortable-header::after {
+    content: '↕';
+    position: absolute;
+    right: 5px;
+    opacity: 0.3;
+    font-size: 0.8em;
+}
+
+th.sortable-header.sorted-asc::after {
+    content: '↑';
+    opacity: 1;
+}
+
+/* Insight Badges */
+.insight-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-right: 8px;
+    border: 1px solid transparent;
+    cursor: help;
+}
+.severity-Critical {
+    background-color: #fee2e2;
+    color: #991b1b;
+    border-color: #f87171;
+}
+.severity-Warning {
+    background-color: #fef3c7;
+    color: #92400e;
+    border-color: #fbbf24;
+}
+.severity-Info {
+    background-color: #dcfce7;
+    color: #166534;
+    border-color: #4ade80;
+}
+
+[data-theme="dark"] .severity-Critical, [data-theme="ultra-dark"] .severity-Critical {
+    background-color: #450a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+}
+[data-theme="dark"] .severity-Warning, [data-theme="ultra-dark"] .severity-Warning {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #78350f;
+}
+[data-theme="dark"] .severity-Info, [data-theme="ultra-dark"] .severity-Info {
+    background-color: #064e3b;
+    color: #6ee7b7;
+    border-color: #065f46;
+}
+

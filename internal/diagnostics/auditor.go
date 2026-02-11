@@ -75,7 +75,73 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 	// 12. Controller Health
 	results = append(results, checkControllerHealth(data, s)...)
 
+	// 13. Log Error Patterns
+	results = append(results, checkLogErrors(s)...)
+
+	// 14. Transparent Hugepages
+	results = append(results, checkTransparentHugePages(data)...)
+
+	// 15. K8s QoS
+	results = append(results, checkK8sQoS(data)...)
+
+	// 16. IRQ Balance
+	results = append(results, checkIRQBalance(data)...)
+
+	// 17. Data Partition on Root
+	results = append(results, checkDataDirPartition(data)...)
+
 	return DiagnosticsReport{Results: results}
+}
+
+func checkLogErrors(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// 1. Partition Rebalance Failures
+	entries, _, err := s.GetLogs(&models.LogFilter{
+		Search: "No nodes are available to perform allocation",
+		Limit:  1,
+	})
+	if err == nil && len(entries) > 0 {
+		results = append(results, CheckResult{
+			Category:      "Cluster Balance",
+			Name:          "Rebalance Failure (Hard Constraints)",
+			Description:   "Balancer cannot find a valid node for a partition due to hard constraints (disk full, rack awareness).",
+			CurrentValue:  "Errors Found",
+			ExpectedValue: "None",
+			Status:        SeverityCritical,
+			Remediation:   "Check disk usage (df -h), rack configuration, or add nodes. Search logs for 'No nodes are available'.",
+		})
+	}
+
+	// 2. Generic Move Failures
+	if len(results) == 0 { // Only check this if the specific one wasn't found to avoid noise
+		entries, _, err = s.GetLogs(&models.LogFilter{
+			Search: "attempt to move replica",
+			Limit:  10, // Get a few to check for "failed"
+		})
+		if err == nil {
+			foundFailure := false
+			for _, e := range entries {
+				if strings.Contains(e.Message, "failed") {
+					foundFailure = true
+					break
+				}
+			}
+			if foundFailure {
+				results = append(results, CheckResult{
+					Category:      "Cluster Balance",
+					Name:          "Partition Move Failed",
+					Description:   "Attempts to move partition replicas are failing.",
+					CurrentValue:  "Failures Found",
+					ExpectedValue: "None",
+					Status:        SeverityWarning,
+					Remediation:   "Check logs for 'attempt to move replica' to see the reason (e.g., disk_full, node_down).",
+				})
+			}
+		}
+	}
+
+	return results
 }
 
 func checkControllerHealth(data *cache.CachedData, s store.Store) []CheckResult {
@@ -516,6 +582,7 @@ func checkSysctl(sysctl map[string]string) []CheckResult {
 	}
 
 	checkInt("fs.aio-max-nr", 1048576, SeverityCritical, "Maximum number of concurrent async I/O requests", "Increase fs.aio-max-nr in /etc/sysctl.conf")
+	checkInt("fs.file-max", 500000, SeverityWarning, "Max open file descriptors (system-wide)", "Increase fs.file-max in /etc/sysctl.conf")
 	checkInt("net.core.somaxconn", 4096, SeverityWarning, "Max socket listen backlog", "Increase net.core.somaxconn to handle burst connections")
 	checkInt("net.core.netdev_max_backlog", 2500, SeverityWarning, "Max packets queued on input interface", "Increase net.core.netdev_max_backlog")
 	checkInt("net.ipv4.tcp_max_syn_backlog", 4096, SeverityWarning, "Max TCP SYN backlog", "Increase net.ipv4.tcp_max_syn_backlog to prevent dropped connections during bursts")
@@ -689,6 +756,10 @@ func checkBottlenecks(s store.Store) []CheckResult {
 		"vectorized_raft_recovery_partitions_to_recover",
 		"vectorized_raft_replicate_ack_all_requests",
 		"vectorized_raft_replicate_ack_leader_requests",
+		"redpanda_cpu_busy_seconds_total",
+		"vectorized_reactor_cpu_busy_ms",
+		"vectorized_reactor_stalls",
+		"vectorized_reactor_threaded_fallbacks",
 	}
 
 	// Use a wide time range to get all metrics
@@ -874,6 +945,28 @@ func checkRedpandaConfig(config map[string]interface{}) []CheckResult {
 		})
 	}
 
+	// Check auto_create_topics_enabled
+	if isTrue("auto_create_topics_enabled") {
+		results = append(results, CheckResult{
+			Category:      "Redpanda Config",
+			Name:          "auto_create_topics_enabled",
+			Description:   "Automatic topic creation",
+			CurrentValue:  "true",
+			ExpectedValue: "false",
+			Status:        SeverityWarning,
+			Remediation:   "Disable auto_create_topics_enabled in production to prevent accidental topic creation and partition count explosion.",
+		})
+	} else {
+		results = append(results, CheckResult{
+			Category:      "Redpanda Config",
+			Name:          "auto_create_topics_enabled",
+			Description:   "Automatic topic creation",
+			CurrentValue:  "false",
+			ExpectedValue: "false",
+			Status:        SeverityPass,
+		})
+	}
+
 	// Check rpk.tune_aio_events
 	// We unconditionally recommend running the tuner. If this is explicitly false, it's a warning.
 	if isFalse("rpk.tune_aio_events") {
@@ -982,5 +1075,248 @@ func checkResources(data *cache.CachedData) []CheckResult {
 		})
 	}
 
+	return results
+}
+
+func checkTransparentHugePages(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+	
+	thp := data.System.TransparentHugePages
+	if thp == "" {
+		// Not captured or not available
+		return results
+	}
+	
+	// Format is typically "[always] madvise never" or "always [madvise] never"
+	// We want "never" to be selected, i.e., "[never]" or "never" if it's just a word
+	
+	if strings.Contains(thp, "[never]") {
+		results = append(results, CheckResult{
+			Category:      "OS Tuning",
+			Name:          "Transparent Hugepages",
+			Description:   "Kernel feature that can cause latency spikes",
+			CurrentValue:  "never",
+			ExpectedValue: "never",
+			Status:        SeverityPass,
+		})
+	} else {
+		// Extract selected one
+		selected := "unknown"
+		parts := strings.Fields(thp)
+		for _, p := range parts {
+			if strings.HasPrefix(p, "[") && strings.HasSuffix(p, "]") {
+				selected = strings.Trim(p, "[]")
+				break
+			}
+		}
+		
+		results = append(results, CheckResult{
+			Category:      "OS Tuning",
+			Name:          "Transparent Hugepages",
+			Description:   "Kernel feature that can cause latency spikes",
+			CurrentValue:  selected,
+			ExpectedValue: "never",
+			Status:        SeverityWarning,
+			Remediation:   "Disable THP: echo never > /sys/kernel/mm/transparent_hugepage/enabled",
+		})
+	}
+	
+	return results
+}
+
+func checkK8sQoS(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+	
+	// Only run if we have K8s data
+	if len(data.K8sStore.Pods) == 0 {
+		return results
+	}
+	
+	// Check Redpanda pods (label app=redpanda or similar, or just check all in our store since we filter on ingestion usually)
+	for _, pod := range data.K8sStore.Pods {
+		for _, container := range pod.Spec.Containers {
+			// Check if requests == limits for CPU and Memory
+			// Note: This relies on parsed resource units which might be strings like "1000m" or "1G"
+			// String comparison works if they are identical strings, but "1G" != "1024M"
+			// Implementing full resource unit parsing is complex. Let's do a basic string equality check first.
+			
+			cpuReq := container.Resources.Requests["cpu"]
+			cpuLim := container.Resources.Limits["cpu"]
+			memReq := container.Resources.Requests["memory"]
+			memLim := container.Resources.Limits["memory"]
+			
+			if cpuReq != cpuLim || memReq != memLim {
+				results = append(results, CheckResult{
+					Category:      "Kubernetes QoS",
+					Name:          fmt.Sprintf("Pod %s QoS", pod.Metadata.Name),
+					Description:   "Guaranteed QoS requires requests == limits",
+					CurrentValue:  fmt.Sprintf("CPU: %s/%s, Mem: %s/%s", cpuReq, cpuLim, memReq, memLim),
+					ExpectedValue: "Requests == Limits",
+					Status:        SeverityWarning,
+					Remediation:   "Set resources.requests equal to resources.limits to ensure Guaranteed QoS and prevent throttling.",
+				})
+			}
+		}
+	}
+	
+	return results
+}
+
+func checkIRQBalance(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+	
+	if len(data.System.Interrupts.Entries) == 0 {
+		return results
+	}
+	
+	// deviceGroup represents a set of IRQs belonging to a single physical device (e.g., nvme0)
+	type deviceGroup struct {
+		Name       string
+		IRQs       []models.IRQEntry
+		TotalCount int64
+		CPUDist    map[int]int64 // CPU ID -> Total Interrupts for this device
+	}
+	
+	groups := make(map[string]*deviceGroup)
+	
+	// Identify relevant interrupts (Network and Disk)
+	keywords := []string{"nvme", "eth", "ens", "eno", "scsi", "virtio", "mlx"}
+	
+	// Helper to extract base device name
+	getBaseName := func(s string) string {
+		// nvme0q1 -> nvme0
+		if strings.HasPrefix(s, "nvme") {
+			if idx := strings.Index(s, "q"); idx != -1 {
+				return s[:idx]
+			}
+		}
+		// eth0-TxRx-0 -> eth0
+		if idx := strings.Index(s, "-"); idx != -1 {
+			return s[:idx]
+		}
+		return s
+	}
+
+	for _, entry := range data.System.Interrupts.Entries {
+		isRelevant := false
+		lowerDev := strings.ToLower(entry.Device)
+		lowerCtrl := strings.ToLower(entry.Controller)
+		
+		for _, k := range keywords {
+			if strings.Contains(lowerDev, k) || strings.Contains(lowerCtrl, k) {
+				isRelevant = true
+				break
+			}
+		}
+		
+		if !isRelevant {
+			continue
+		}
+		
+		baseName := getBaseName(entry.Device)
+		if _, exists := groups[baseName]; !exists {
+			groups[baseName] = &deviceGroup{
+				Name:    baseName,
+				CPUDist: make(map[int]int64),
+			}
+		}
+		
+		// Sum counts
+		var entryTotal int64
+		for i, count := range entry.CPUCounts {
+			entryTotal += count
+			groups[baseName].CPUDist[i] += count
+		}
+		
+		groups[baseName].IRQs = append(groups[baseName].IRQs, entry)
+		groups[baseName].TotalCount += entryTotal
+	}
+	
+	// Analyze Groups
+	for _, g := range groups {
+		if g.TotalCount < 10000 {
+			continue // Ignore low volume devices
+		}
+		
+		// 1. Check if the device as a whole is pinned to a single CPU
+		var maxCPU int
+		var maxCount int64
+		activeCPUs := 0
+		
+		for cpu, count := range g.CPUDist {
+			if count > 0 {
+				activeCPUs++
+			}
+			if count > maxCount {
+				maxCount = count
+				maxCPU = cpu
+			}
+		}
+		
+		// Logic:
+		// If Multi-Queue (len(IRQs) > 1), we expect activeCPUs > 1 (Distributed)
+		// We skip Single-Queue devices as pinning is often intentional or unavoidable.
+		
+		if len(g.IRQs) > 1 {
+			// Multi-Queue Logic
+			// If all traffic is on 1 CPU despite having multiple queues, that's bad.
+			if activeCPUs == 1 {
+				results = append(results, CheckResult{
+					Category:      "Hardware & IRQ",
+					Name:          fmt.Sprintf("MQ Imbalance (%s)", g.Name),
+					Description:   fmt.Sprintf("Multi-Queue device %s has %d queues but is pinned to single CPU%d", g.Name, len(g.IRQs), maxCPU),
+					CurrentValue:  "Pinned to 1 CPU",
+					ExpectedValue: "Distributed across CPUs",
+					Status:        SeverityWarning,
+					Remediation:   "Check 'rpk redpanda tune cpu' or irqbalance settings. All queues are hitting one core.",
+				})
+			}
+		}
+	}
+	
+	return results
+}
+
+func checkDataDirPartition(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+	
+	dataDir := data.RedpandaDataDir
+	if dataDir == "" {
+		dataDir = "/var/lib/redpanda/data" // Default guess if not parsed
+	}
+
+	// Use effective data directory (resolved from actual segment paths) if available
+	// This handles symlinks where configured dir is on root but actual data is on a mount.
+	if data.StorageAnalysis != nil && data.StorageAnalysis.EffectiveDataDir != "" {
+		dataDir = data.StorageAnalysis.EffectiveDataDir
+	}
+	
+	// Find mount point
+	var bestMatch models.FileSystemEntry
+	maxLen := -1
+	
+	for _, fs := range data.System.FileSystems {
+		if strings.HasPrefix(dataDir, fs.MountPoint) {
+			if len(fs.MountPoint) > maxLen {
+				maxLen = len(fs.MountPoint)
+				bestMatch = fs
+			}
+		}
+	}
+	
+	if maxLen != -1 {
+		if bestMatch.MountPoint == "/" {
+			results = append(results, CheckResult{
+				Category:      "Disk Configuration",
+				Name:          "Data Directory on Root",
+				Description:   "Redpanda data directory is on the root partition",
+				CurrentValue:  fmt.Sprintf("%s on /", dataDir),
+				ExpectedValue: "Separate Partition",
+				Status:        SeverityWarning,
+				Remediation:   "Move Redpanda data to a dedicated XFS partition to avoid OS contention.",
+			})
+		}
+	}
+	
 	return results
 }

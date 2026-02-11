@@ -10,13 +10,13 @@ tasks:
   build:linux:
     desc: "Builds the bundleViewer application for Linux (amd64)"
     cmds:
-      - GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
+      - GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
     silent: false
 
   build:macos:
     desc: "Builds the bundleViewer application for macOS (arm64)"
     cmds:
-      - GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+      - GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
     silent: false
 
   run:
@@ -24,7 +24,7 @@ tasks:
     deps:
       - db:clean
     cmds:
-      - GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 ./bundleViewer {{.CLI_ARGS}}
+      - go run -ldflags "-X main.Version={{.TAG | default "dev"}}" cmd/webapp/main.go {{.CLI_ARGS}}
     silent: false
 
   clean:

@@ -171,6 +171,20 @@ type MDArray struct {
 	Status  string // e.g., "[UU]", "[_U]" (degraded)
 }
 
+// IRQEntry represents a row from /proc/interrupts
+type IRQEntry struct {
+	IRQID      string
+	CPUCounts  []int64
+	Controller string
+	Device     string
+}
+
+// Interrupts represents parsed /proc/interrupts
+type Interrupts struct {
+	CPUs    []string // CPU0, CPU1, etc.
+	Entries []IRQEntry
+}
+
 // SystemState aggregates all system level information
 type SystemState struct {
 	FileSystems []FileSystemEntry
@@ -193,6 +207,8 @@ type SystemState struct {
 	MDStat      MDStat // From /proc/mdstat
 	CmdLine     string // From /proc/cmdline
 	CoreCount   int
+	TransparentHugePages string // From /sys/kernel/mm/transparent_hugepage/enabled
+	Interrupts  Interrupts // From /proc/interrupts
 }
 
 // TimelineSourceData holds all data needed to generate the timeline

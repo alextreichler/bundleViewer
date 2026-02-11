@@ -5,3 +5,21 @@ bin/
 .DS_Store
 *.log
 logs
+
+# Exclude extracted bundle artifacts
+admin/
+etc/
+utils/
+proc/
+k8s/
+*.json
+*.yaml
+
+# Exclude agent/IDE context
+.gemini/
+.idea/
+.vscode/
+
+# Exclude generated analysis files
+potential_logs.csv
+LOGS.md
