@@ -10,6 +10,7 @@
     --header-bg-color: #ffffff;
     --link-color: #2563eb;
     --link-hover: #1e40af;
+    --danger-color: #ef4444; /* Red 600 */
     
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
     --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
@@ -31,6 +32,7 @@ html[data-theme="dark"] {
     --header-bg-color: #1e293b;
     --link-color: #3b82f6;
     --link-hover: #60a5fa;
+    --danger-color: #f87171; /* Red 400 */
 }
 
 html[data-theme="ultra-dark"] {
@@ -40,6 +42,7 @@ html[data-theme="ultra-dark"] {
     --border-color: #262626;
     --header-bg-color: #0a0a0a;
     --link-color: #3b82f6;
+    --danger-color: #ef4444;
 }
 
 /* Retro Theme */
@@ -52,6 +55,7 @@ html[data-theme="retro"] {
     --link-color: #00e5ff;
     --primary-color: #ff00ff;
     --text-color-muted: #00cccc;
+    --danger-color: #ff0000;
     --radius: 0; /* Retro usually means sharp corners */
 }
 html[data-theme="retro"] body {
@@ -97,6 +101,7 @@ html[data-theme="powershell"] {
     --link-color: #ffff00; /* Yellow */
     --primary-color: #cccccc; /* Button border color essentially */
     --primary-hover: #ffffff;
+    --danger-color: #ff3333;
     --radius: 0;
 }
 
@@ -772,5 +777,28 @@ th.sortable-header.sorted-asc::after {
     background-color: #064e3b;
     color: #6ee7b7;
     border-color: #065f46;
+}
+
+/* Pin Button Styles */
+.pin-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    color: var(--text-color-muted);
+    padding: 0;
+    line-height: 1;
+    transition: transform 0.1s, color 0.2s;
+    user-select: none;
+}
+
+.pin-btn:hover {
+    color: #fbbf24; /* Yellow 400 */
+    transform: scale(1.2);
+}
+
+.pin-btn.pinned {
+    color: #f59e0b; /* Yellow 500 */
+    text-shadow: 0 0 2px rgba(0,0,0,0.2);
 }
 

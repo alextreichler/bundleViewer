@@ -101,19 +101,15 @@ func (s *Server) skewHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	type SkewPageData struct {
+		BasePageData
 		NodeHostname string
 		Analysis     analysis.SkewAnalysis
-		Sessions     map[string]*BundleSession
-		ActivePath   string
-		LogsOnly     bool
 	}
 
 	pageData := SkewPageData{
+		BasePageData: s.newBasePageData("Skew"),
 		NodeHostname: s.nodeHostname,
 		Analysis:     skewData,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

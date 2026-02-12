@@ -1310,6 +1310,14 @@ func ParseRedpandaConfig(bundlePath string) (map[string]interface{}, error) {
 		// Calculate indentation
 		indentation := len(line) - len(strings.TrimLeft(line, " "))
 
+		// Handle list items (e.g. - --flag=value)
+		if strings.HasPrefix(trimmedLine, "- ") {
+			// Associate with the parent key to keep the map flat but inclusive
+			listKey := "list_item_" + strings.Join(parentKeys, ".") + "_" + strconv.Itoa(len(config))
+			config[listKey] = strings.TrimPrefix(trimmedLine, "- ")
+			continue
+		}
+
 		// Split key and value
 		parts := strings.SplitN(trimmedLine, ":", 2)
 		key := strings.TrimSpace(parts[0])

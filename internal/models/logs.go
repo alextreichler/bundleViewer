@@ -3,6 +3,7 @@ package models
 import "time"
 
 type LogEntry struct {
+	ID         int64     `json:"id"`
 	Timestamp  time.Time `json:"timestamp"`
 	Level      string    `json:"level"`
 	Node       string    `json:"node"`
@@ -15,6 +16,7 @@ type LogEntry struct {
 	Fingerprint string   `json:"fingerprint"`
 	Snippet     string   `json:"snippet"` // FTS snippet with highlighting
 	Insight     *LogInsight `json:"insight,omitempty"`
+	IsPinned    bool        `json:"isPinned"`
 }
 
 type LogInsight struct {
@@ -44,4 +46,9 @@ type LogPattern struct {
 	FirstSeen   time.Time   `json:"first_seen"`
 	LastSeen    time.Time   `json:"last_seen"`
 	Insight     *LogInsight `json:"insight,omitempty"`
+}
+
+type PinnedLog struct {
+	LogEntry
+	Note string `json:"note"`
 }

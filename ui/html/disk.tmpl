@@ -15,7 +15,7 @@
             <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem; text-align: center;"></p>
 		</div>
 	</div>
-    {{template "nav" (dict "Active" "Disk" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 	<h1>Disk Overview</h1>
 	<h2>Node: {{.NodeHostname}}</h2>
 

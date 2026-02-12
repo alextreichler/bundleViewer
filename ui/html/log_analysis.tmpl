@@ -39,7 +39,7 @@
 <body>
 	
 	</div>
-    {{template "nav" (dict "Active" "Logs" "LogsOnly" .LogsOnly "Sessions" .Sessions "ActivePath" .ActivePath)}}
+    {{template "nav" .}}
     
     <h1>Log Analysis</h1>
     <div id="analysis-content" hx-get="/api/logs/analysis" hx-trigger="load" hx-swap="outerHTML">

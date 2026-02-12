@@ -86,7 +86,7 @@ func shouldWipeDB(dbPath, currentBundlePath string) bool {
 	// Check Version
 	var version int
 	err = db.QueryRow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&version)
-	if err != nil || version < 5 {
+	if err != nil || version < 9 {
 		return true // Old version or no version table? Wipe.
 	}
 
@@ -133,7 +133,7 @@ func (s *SQLiteStore) RestoreIndexes() error {
 	
 	// 1. Re-create FTS
 	createFTS := `CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
-		message,
+		message_lower,
 		content='logs',
 		content_rowid='id',
 		tokenize='trigram'
@@ -145,14 +145,14 @@ func (s *SQLiteStore) RestoreIndexes() error {
 	// 2. Re-create Triggers
 	triggers := []string{
 		`CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
-		  INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		  INSERT INTO logs_fts(rowid, message_lower) VALUES (new.id, new.message_lower);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN
-		  INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
+		  INSERT INTO logs_fts(logs_fts, rowid, message_lower) VALUES('delete', old.id, old.message_lower);
 		END;`,
 		`CREATE TRIGGER IF NOT EXISTS logs_au AFTER UPDATE ON logs BEGIN
-		  INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
-		  INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		  INSERT INTO logs_fts(logs_fts, rowid, message_lower) VALUES('delete', old.id, old.message_lower);
+		  INSERT INTO logs_fts(rowid, message_lower) VALUES (new.id, new.message_lower);
 		END;`,
 	}
 	for _, t := range triggers {
@@ -375,6 +375,25 @@ END;`,
 			return fmt.Errorf("failed to update schema version to 7: %w", err)
 		}
 		currentVersion = 7
+	}
+
+	// Version 7 -> 8: Add Pins table
+	if currentVersion < 8 {
+		if _, err := tx.Exec(PinsSchema); err != nil {
+			return fmt.Errorf("failed to create pins table: %w", err)
+		}
+		if _, err := tx.Exec("INSERT INTO schema_version (version) VALUES (8)"); err != nil {
+			return fmt.Errorf("failed to update schema version to 8: %w", err)
+		}
+		currentVersion = 8
+	}
+
+	// Version 8 -> 9: Case-insensitive search (handled by shouldWipeDB forcing fresh schema)
+	if currentVersion < 9 {
+		if _, err := tx.Exec("INSERT INTO schema_version (version) VALUES (9)"); err != nil {
+			return fmt.Errorf("failed to update schema version to 9: %w", err)
+		}
+		currentVersion = 9
 	}
 
 	return tx.Commit()
@@ -759,8 +778,8 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 	)
 
 	// Combine Search and Ignore into a single FTS query if either is present
-	ftsSearch := buildFTSQuery(filter.Search)
-	ftsIgnore := buildFTSQuery(filter.Ignore)
+	ftsSearch := buildFTSQuery(strings.ToLower(filter.Search))
+	ftsIgnore := buildFTSQuery(strings.ToLower(filter.Ignore))
 
 	// If the search query starts with "NOT", treat it as an ignore filter
 	// This allows "NOT error" to work as expected (implicitly "everything NOT error")
@@ -780,7 +799,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 	}
 
 	if finalFTSQuery != "" {
-		queryBuilder.WriteString("SELECT T1.id, T1.timestamp, T1.level, T1.node, T1.shard, T1.component, T1.message, T1.raw, T1.line_number, T1.file_path, snippet(logs_fts, 0, '<mark>', '</mark>', '...', 64) as snippet FROM logs AS T1 JOIN logs_fts AS T2 ON T1.id = T2.rowid")
+		queryBuilder.WriteString("SELECT T1.id, T1.timestamp, T1.level, T1.node, T1.shard, T1.component, T1.message, T1.raw, T1.line_number, T1.file_path, snippet(logs_fts, 0, '<mark>', '</mark>', '...', 64) as snippet, (P.log_id IS NOT NULL) as is_pinned FROM logs AS T1 JOIN logs_fts AS T2 ON T1.id = T2.rowid LEFT JOIN pins AS P ON T1.id = P.log_id")
 		countBuilder.WriteString("SELECT COUNT(T1.id) FROM logs AS T1 JOIN logs_fts AS T2 ON T1.id = T2.rowid")
 
 		whereClauses = append(whereClauses, "T2.logs_fts MATCH ?")
@@ -788,11 +807,11 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		args = append(args, finalFTSQuery)
 		countArgs = append(countArgs, finalFTSQuery)
 	} else {
-		queryBuilder.WriteString("SELECT id, timestamp, level, node, shard, component, message, raw, line_number, file_path, '' as snippet FROM logs")
-		countBuilder.WriteString("SELECT COUNT(*) FROM logs")
+		queryBuilder.WriteString("SELECT L.id, L.timestamp, L.level, L.node, L.shard, L.component, L.message, L.raw, L.line_number, L.file_path, '' as snippet, (P.log_id IS NOT NULL) as is_pinned FROM logs AS L LEFT JOIN pins AS P ON L.id = P.log_id")
+		countBuilder.WriteString("SELECT COUNT(*) FROM logs AS L")
 
 		if ftsIgnore != "" {
-			whereClauses = append(whereClauses, "id NOT IN (SELECT rowid FROM logs_fts WHERE logs_fts MATCH ?)")
+			whereClauses = append(whereClauses, "L.id NOT IN (SELECT rowid FROM logs_fts WHERE logs_fts MATCH ?)")
 			args = append(args, ftsIgnore)
 			countArgs = append(countArgs, ftsIgnore)
 		}
@@ -808,7 +827,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		if finalFTSQuery != "" {
 			whereClauses = append(whereClauses, fmt.Sprintf("T1.level IN (%s)", strings.Join(placeholders, ",")))
 		} else {
-			whereClauses = append(whereClauses, fmt.Sprintf("level IN (%s)", strings.Join(placeholders, ",")))
+			whereClauses = append(whereClauses, fmt.Sprintf("L.level IN (%s)", strings.Join(placeholders, ",")))
 		}
 	}
 	if len(filter.Node) > 0 {
@@ -821,7 +840,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		if finalFTSQuery != "" {
 			whereClauses = append(whereClauses, fmt.Sprintf("T1.node IN (%s)", strings.Join(placeholders, ",")))
 		} else {
-			whereClauses = append(whereClauses, fmt.Sprintf("node IN (%s)", strings.Join(placeholders, ",")))
+			whereClauses = append(whereClauses, fmt.Sprintf("L.node IN (%s)", strings.Join(placeholders, ",")))
 		}
 	}
 	if len(filter.Component) > 0 {
@@ -834,7 +853,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		if finalFTSQuery != "" {
 			whereClauses = append(whereClauses, fmt.Sprintf("T1.component IN (%s)", strings.Join(placeholders, ",")))
 		} else {
-			whereClauses = append(whereClauses, fmt.Sprintf("component IN (%s)", strings.Join(placeholders, ",")))
+			whereClauses = append(whereClauses, fmt.Sprintf("L.component IN (%s)", strings.Join(placeholders, ",")))
 		}
 	}
 
@@ -849,7 +868,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 			if finalFTSQuery != "" {
 				whereClauses = append(whereClauses, "T1.timestamp >= ?")
 			} else {
-				whereClauses = append(whereClauses, "timestamp >= ?")
+				whereClauses = append(whereClauses, "L.timestamp >= ?")
 			}
 			args = append(args, ts)
 			countArgs = append(countArgs, ts)
@@ -868,7 +887,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 			if finalFTSQuery != "" {
 				whereClauses = append(whereClauses, "T1.timestamp <= ?")
 			} else {
-				whereClauses = append(whereClauses, "timestamp <= ?")
+				whereClauses = append(whereClauses, "L.timestamp <= ?")
 			}
 			args = append(args, ts)
 			countArgs = append(countArgs, ts)
@@ -900,7 +919,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 	if finalFTSQuery != "" {
 		queryBuilder.WriteString(fmt.Sprintf(" ORDER BY T1.timestamp %s", sortDir))
 	} else {
-		queryBuilder.WriteString(fmt.Sprintf(" ORDER BY timestamp %s", sortDir))
+		queryBuilder.WriteString(fmt.Sprintf(" ORDER BY L.timestamp %s", sortDir))
 	}
 
 	if filter.Limit > 0 {
@@ -921,8 +940,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 	for rows.Next() {
 		var logEntry models.LogEntry
 		var ts int64
-		var id int64
-		err = rows.Scan(&id, &ts, &logEntry.Level, &logEntry.Node, &logEntry.Shard, &logEntry.Component, &logEntry.Message, &logEntry.Raw, &logEntry.LineNumber, &logEntry.FilePath, &logEntry.Snippet)
+		err = rows.Scan(&logEntry.ID, &ts, &logEntry.Level, &logEntry.Node, &logEntry.Shard, &logEntry.Component, &logEntry.Message, &logEntry.Raw, &logEntry.LineNumber, &logEntry.FilePath, &logEntry.Snippet, &logEntry.IsPinned)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan log entry: %w", err)
 		}
@@ -1338,9 +1356,71 @@ func (s *SQLiteStore) GetDistinctMetricNames() ([]string, error) {
 					return nil, err
 				}
 				d.Percentage = (float64(d.Occurrences) / float64(total)) * 100
-				details = append(details, d)
-			}
-		
-			return details, nil
-		}
-		
+							details = append(details, d)
+						}
+					
+						return details, nil
+					}
+				
+				func (s *SQLiteStore) PinLog(logID int64) error {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+				
+					_, err := s.db.Exec(`
+						INSERT INTO pins (log_id, created_at)
+						VALUES (?, ?)
+						ON CONFLICT(log_id) DO NOTHING
+					`, logID, time.Now().UnixMicro())
+					return err
+				}
+				
+				func (s *SQLiteStore) UnpinLog(logID int64) error {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+				
+					_, err := s.db.Exec("DELETE FROM pins WHERE log_id = ?", logID)
+					return err
+				}
+				
+				func (s *SQLiteStore) UpdatePinNote(logID int64, note string) error {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+				
+					_, err := s.db.Exec("UPDATE pins SET note = ? WHERE log_id = ?", note, logID)
+					return err
+				}
+				
+				func (s *SQLiteStore) GetPinnedLogs() ([]*models.PinnedLog, error) {
+					s.mu.RLock()
+					defer s.mu.RUnlock()
+				
+					query := `
+						SELECT L.id, L.timestamp, L.level, L.node, L.shard, L.component, L.message, L.raw, L.line_number, L.file_path, P.note
+						FROM logs L
+						JOIN pins P ON L.id = P.log_id
+						ORDER BY P.created_at ASC
+					`
+				
+					rows, err := s.db.Query(query)
+					if err != nil {
+						return nil, fmt.Errorf("failed to query pinned logs: %w", err)
+					}
+					defer func() { _ = rows.Close() }()
+				
+					var pins []*models.PinnedLog
+					for rows.Next() {
+						var p models.PinnedLog
+						var ts int64
+						err := rows.Scan(&p.ID, &ts, &p.Level, &p.Node, &p.Shard, &p.Component, &p.Message, &p.Raw, &p.LineNumber, &p.FilePath, &p.Note)
+						if err != nil {
+							return nil, err
+						}
+						if ts != 0 {
+							p.Timestamp = time.UnixMicro(ts).UTC()
+						}
+						p.IsPinned = true
+						pins = append(pins, &p)
+					}
+					return pins, rows.Err()
+				}
+				

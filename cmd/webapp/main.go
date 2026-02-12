@@ -17,6 +17,7 @@ import (
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/server"
 	"github.com/alextreichler/bundleViewer/internal/store"
+	"github.com/alextreichler/bundleViewer/internal/version"
 )
 
 var Version = "dev"
@@ -61,6 +62,32 @@ func main() {
 
 	// Initialize the logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	// Version check
+	version.Current = Version
+	latestVersionChan := make(chan string, 1)
+	go func() {
+		latest, err := version.CheckUpdate()
+		if err != nil {
+			logger.Debug("Failed to check for updates", "error", err)
+			latestVersionChan <- ""
+			return
+		}
+		if latest != "" {
+			logger.Info("A new version of bundleViewer is available!", "latest", latest, "current", Version)
+			logger.Info("Run this command to update:", "command", version.UpdateCommand())
+			latestVersionChan <- latest
+		} else {
+			latestVersionChan <- ""
+		}
+	}()
+
+	var latestVersion string
+	select {
+	case latestVersion = <-latestVersionChan:
+	case <-time.After(1 * time.Second):
+		logger.Debug("Version check timed out")
+	}
 
 	// Set up application data directory
 	cacheDir, err := os.UserCacheDir()
@@ -121,7 +148,7 @@ func main() {
 		storeInterface = sqliteStore
 	}
 
-	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress) // Pass logger, logsOnly, persist
+	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress, Version, latestVersion) // Pass logger, logsOnly, persist
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)

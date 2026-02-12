@@ -20,23 +20,20 @@ type SearchResult struct {
 }
 
 type GlobalSearchPageData struct {
+	BasePageData
 	Query        string
 	Results      []SearchResult
 	NodeHostname string
-	Sessions     map[string]*BundleSession
-	ActivePath   string
-	LogsOnly     bool
 }
 
 func (s *Server) searchHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" || s.store == nil {
-		if err := s.searchTemplate.Execute(w, GlobalSearchPageData{
+		pageData := GlobalSearchPageData{
+			BasePageData: s.newBasePageData("Search"),
 			NodeHostname: s.nodeHostname,
-			Sessions:     s.sessions,
-			ActivePath:   s.activePath,
-			LogsOnly:     s.logsOnly,
-		}); err != nil {
+		}
+		if err := s.searchTemplate.Execute(w, pageData); err != nil {
 			s.logger.Error("Failed to execute search template", "error", err)
 		}
 		return
@@ -166,12 +163,10 @@ func (s *Server) searchHandler(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	pageData := GlobalSearchPageData{
+		BasePageData: s.newBasePageData("Search"),
 		Query:        query,
 		Results:      results,
 		NodeHostname: s.nodeHostname,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

@@ -24,12 +24,17 @@
         .diag-table th {
             background-color: var(--header-bg-color);
         }
+        .remediation-cell {
+            white-space: pre-line;
+            max-width: 500px;
+            font-size: 0.9em;
+        }
     </style>
 </head>
 <body>
 	
 	</div>
-    {{template "nav" (dict "Active" "Diagnostics" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 
 	<h2>Node: {{.NodeHostname}} - Diagnostics Report</h2>
 
@@ -74,12 +79,12 @@
         <tbody>
             {{range .Report.Results}}
             <tr>
-                <td class="status-{{.Status | lower}}">{{.Status}}</td>
+                <td><span class="insight-badge severity-{{.Status}}">{{.Status}}</span></td>
                 <td>{{.Category}}</td>
                 <td title="{{.Description}}">{{.Name}}</td>
-                <td>{{.CurrentValue}}</td>
-                <td>{{.ExpectedValue}}</td>
-                <td>{{.Remediation}}</td>
+                <td style="font-family: monospace;">{{.CurrentValue}}</td>
+                <td style="font-family: monospace;">{{.ExpectedValue}}</td>
+                <td class="remediation-cell">{{.Remediation}}</td>
             </tr>
             {{end}}
         </tbody>

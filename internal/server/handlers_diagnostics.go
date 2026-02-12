@@ -18,21 +18,17 @@ func (s *Server) diagnosticsHandler(w http.ResponseWriter, r *http.Request) {
 	report := diagnostics.Audit(s.cachedData, s.store)
 
 	type DiagnosticsPageData struct {
+		BasePageData
 		NodeHostname string
 		Report       diagnostics.DiagnosticsReport
 		Syslog       models.SyslogAnalysis
-		Sessions     map[string]*BundleSession
-		ActivePath   string
-		LogsOnly     bool
 	}
 
 	pageData := DiagnosticsPageData{
+		BasePageData: s.newBasePageData("Diagnostics"),
 		NodeHostname: s.nodeHostname,
 		Report:       report,
 		Syslog:       s.cachedData.System.Syslog,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

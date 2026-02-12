@@ -8,7 +8,7 @@
 <body>
     		
     		</div>
-    	    {{template "nav" (dict "Active" "Kafka" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    	    {{template "nav" .}}
     		    <h1>Kafka Metadata</h1>    <button onclick="toggleRawJson()">View Raw JSON</button>
     		    <pre id="raw-json" style="display: none;"><code>{{if .RawJSON}}{{.RawJSON}}{{else}}Raw JSON data not available.{{end}}</code></pre>
     <p><strong>Cluster:</strong> {{.Metadata.Cluster}}</p>

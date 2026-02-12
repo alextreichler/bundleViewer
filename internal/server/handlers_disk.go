@@ -151,29 +151,25 @@ func (s *Server) diskOverviewHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	type DiskPageData struct {
+		BasePageData
 		ResourceUsage   models.ResourceUsage
 		DataDiskStats   models.DiskStats
 		CacheDiskStats  models.DiskStats
 		TopicsDiskInfo  []TopicDiskInfo
 		StorageAnalysis *models.StorageAnalysis
 		NodeHostname    string
-		Sessions        map[string]*BundleSession
-		ActivePath      string
-		LogsOnly        bool
 	}
 
 	// storageAnalysis is already computed above
 
 	pageData := DiskPageData{
+		BasePageData:    s.newBasePageData("Disk"),
 		ResourceUsage:   resourceUsage,
 		DataDiskStats:   dataDiskStats,
 		CacheDiskStats:  cacheDiskStats,
 		TopicsDiskInfo:  topicsDiskInfo,
 		StorageAnalysis: storageAnalysis,
 		NodeHostname:    s.nodeHostname,
-		Sessions:        s.sessions,
-		ActivePath:      s.activePath,
-		LogsOnly:        s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

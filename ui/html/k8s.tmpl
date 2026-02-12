@@ -10,7 +10,7 @@
 <body>
 	
 	</div>
-    {{template "nav" (dict "Active" "K8s" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 	<h1>Kubernetes Resources</h1>
     <p>Node: {{.NodeHostname}}</p>
 

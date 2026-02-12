@@ -16,7 +16,7 @@
     <script src="/static/common.js"></script>
 </head>
 <body data-bs-theme="light">
-    {{template "nav" (dict "Active" .ActivePath "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 
     <main>
         {{template "content" .}}

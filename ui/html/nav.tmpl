@@ -22,6 +22,7 @@
         <a href="/timeline" class="{{if eq .Active "Timeline"}}active{{end}}">Timeline</a>
         <a href="/skew" class="{{if eq .Active "Skew"}}active{{end}}">Skew Analysis</a>
         <a href="/diagnostics" class="{{if eq .Active "Diagnostics"}}active{{end}}">Diagnostics</a>
+        <a href="/notebook" class="{{if eq .Active "Notebook"}}active{{end}}">Notebook</a>
         {{end}}
     </div>
 
@@ -69,6 +70,13 @@
                 <button class="theme-select-option" data-theme="powershell">Powershell</button>
             </div>
         </div>
+    </div>
+    
+    <div class="version-info" style="margin-left: 20px; font-size: 0.7rem; color: var(--text-color-muted); display: flex; flex-direction: column; align-items: flex-end; justify-content: center; border-left: 1px solid var(--border-color); padding-left: 10px;">
+        <span>v{{.CurrentVersion}}</span>
+        {{if .UpdateAvailable}}
+        <span class="update-badge" title="New version {{.LatestVersion}} available! Run: {{.UpdateCommand}}" style="background-color: var(--primary-color); color: white; padding: 1px 4px; border-radius: 3px; font-weight: bold; margin-top: 2px; cursor: help;">Update Available!</span>
+        {{end}}
     </div>
 </nav>
 {{end}}

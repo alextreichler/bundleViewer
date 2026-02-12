@@ -38,6 +38,7 @@ type NetworkMetrics struct {
 }
 
 type MetricsPageData struct {
+	BasePageData
 	NodeHostname  string
 	ResourceUsage models.ResourceUsage
 	ShardCPU      []ShardCPUMetric
@@ -48,9 +49,6 @@ type MetricsPageData struct {
 	CoreCount     int
 	Network       NetworkMetrics
 	MetricNames   []string // Added for interactive explorer
-	Sessions      map[string]*BundleSession
-	ActivePath    string
-	LogsOnly      bool
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +82,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
                 </div>
             </div>
         </nav>
+        <div class="version-info" style="position: absolute; top: 10px; right: 10px; font-size: 0.7rem; color: var(--text-color-muted);">
+            v%s
+        </div>
         <div class="container" style="height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
             <div class="card" style="text-align: center; max-width: 400px; width: 100%%;">
                 <h2 style="margin-bottom: 1rem;">Loading Metrics...</h2>
@@ -96,7 +97,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 </body>
-</html>`)
+</html>`, s.currentVersion)
 }
 
 func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
@@ -330,6 +331,7 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Build page data
 	pageData := MetricsPageData{
+		BasePageData:  s.newBasePageData("Metrics"),
 		NodeHostname:  s.nodeHostname,
 		ResourceUsage: resourceUsage,
 		ShardCPU:      shardCPU,
@@ -340,9 +342,6 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		CoreCount:     s.cachedData.System.CoreCount,
 		Network:       networkMetrics,
 		MetricNames:   metricNames,
-		Sessions:      s.sessions,
-		ActivePath:    s.activePath,
-		LogsOnly:      s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

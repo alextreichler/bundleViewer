@@ -18,6 +18,11 @@ type Store interface {
 	GetDistinctLogComponents() ([]string, error)
 	GetDistinctMetricNames() ([]string, error)
 
+	PinLog(logID int64) error
+	UnpinLog(logID int64) error
+	UpdatePinNote(logID int64, note string) error
+	GetPinnedLogs() ([]*models.PinnedLog, error)
+
 	BulkInsertK8sEvents(events []models.K8sResource) error
 	
 	GetLogCountsByTime(bucketSize time.Duration) (map[time.Time]int, error)

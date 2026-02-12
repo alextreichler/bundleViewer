@@ -53,7 +53,7 @@
 <body>
 	
 	</div>
-    {{template "nav" (dict "Active" "" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 	
     <h1>Global Search Results for "{{.Query}}"</h1>
 

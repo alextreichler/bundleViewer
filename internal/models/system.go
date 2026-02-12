@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // FileSystemEntry represents a row from df command
 type FileSystemEntry struct {
 	Filesystem string
@@ -72,6 +74,14 @@ type LoadAvg struct {
 	OneMin     float64
 	FiveMin    float64
 	FifteenMin float64
+}
+
+type Process struct {
+	PID     string  `json:"pid"`
+	User    string  `json:"user"`
+	CPU     float64 `json:"cpu"`
+	Memory  float64 `json:"memory"`
+	Command string  `json:"command"`
 }
 
 // UnameInfo represents system information from uname command
@@ -171,7 +181,7 @@ type MDArray struct {
 	Status  string // e.g., "[UU]", "[_U]" (degraded)
 }
 
-// IRQEntry represents a row from /proc/interrupts
+// IRQEntry represents a row from /proc/interrupts or /proc/softirqs
 type IRQEntry struct {
 	IRQID      string
 	CPUCounts  []int64
@@ -179,7 +189,7 @@ type IRQEntry struct {
 	Device     string
 }
 
-// Interrupts represents parsed /proc/interrupts
+// Interrupts represents parsed /proc/interrupts or /proc/softirqs
 type Interrupts struct {
 	CPUs    []string // CPU0, CPU1, etc.
 	Entries []IRQEntry
@@ -191,6 +201,7 @@ type SystemState struct {
 	Memory      MemoryStats
 	MemInfo     MemInfo // Detailed memory info from /proc/meminfo
 	Load        LoadAvg
+	Processes   []Process // Top CPU consumers
 	Uname       UnameInfo
 	DMI         DMIInfo // Hardware info
 	Dig         DigInfo // DNS info
@@ -209,6 +220,7 @@ type SystemState struct {
 	CoreCount   int
 	TransparentHugePages string // From /sys/kernel/mm/transparent_hugepage/enabled
 	Interrupts  Interrupts // From /proc/interrupts
+	SoftIRQs    Interrupts // From /proc/softirqs
 }
 
 // TimelineSourceData holds all data needed to generate the timeline
@@ -216,4 +228,28 @@ type TimelineSourceData struct {
 	Logs      []*LogEntry
 	K8sEvents []K8sResource // Placeholder, we might need a specific Event struct
 	K8sPods   []K8sResource // Added for Pod lifecycle analysis
+}
+
+type SelfTestResult struct {
+	Name        string    `json:"name"`
+	Info        string    `json:"info"`
+	Type        string    `json:"type"`
+	TestID      string    `json:"test_id"`
+	Timeouts    int       `json:"timeouts"`
+	StartTime   time.Time `json:"start_time"`
+	EndTime     time.Time `json:"end_time"`
+	DurationMs  int64     `json:"duration_ms"`
+	IOPS        float64   `json:"iops"`
+	Throughput  int64     `json:"throughput"` // Bytes/sec
+	LatencyP50  int64     `json:"latency_p50"`  // Microseconds
+	LatencyP90  int64     `json:"latency_p90"`
+	LatencyP99  int64     `json:"latency_p99"`
+	LatencyP999 int64     `json:"latency_p999"`
+	LatencyMax  int64     `json:"latency_max"`
+}
+
+type SelfTestNodeResult struct {
+	NodeID  int              `json:"node_id"`
+	Status  string           `json:"status"`
+	Results []SelfTestResult `json:"results"`
 }

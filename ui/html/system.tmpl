@@ -51,7 +51,7 @@
 </head>
 <body>
     					
-    					</div>    	    {{template "nav" (dict "Active" "System" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    					</div>    	    {{template "nav" .}}
     	    <h1>System Status: {{.NodeHostname}}</h1>    <div class="system-grid">
         <!-- System Info -->
         <div class="card">
@@ -290,6 +290,49 @@
             {{end}}
         </div>
     </div>
+
+    <!-- Self-Test Results -->
+    {{if .SelfTestResults}}
+    <div class="card" style="margin-top: 20px;">
+        <h3>Redpanda Self-Test Results</h3>
+        <p style="font-size: 0.9em; color: var(--text-color-muted); margin-bottom: 15px;">
+            Redpanda minimum performance threshold for production: <br>
+            • <strong>Small block write:</strong> >= 4.0 MB/s (4KB, dsync: true)<br>
+            • <strong>Medium block write:</strong> >= 30.0 MB/s (16KB, dsync: false)
+        </p>
+        {{range .SelfTestResults}}
+        <div style="margin-bottom: 25px;">
+            <h4 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px;">Node {{.NodeID}} (Status: {{.Status}})</h4>
+            <table class="sortable-table">
+                <thead>
+                    <tr>
+                        <th>Test Name</th>
+                        <th>Info</th>
+                        <th>Throughput</th>
+                        <th>IOPS</th>
+                        <th>Latency (P50/P99)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Results}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td style="font-size: 0.85em; color: var(--text-color-muted);">{{.Info}}</td>
+                        <td style="font-weight: bold; {{if and (eq .Type "disk") (contains .Name "4KB sequential write") (contains .Info "dsync: true") (lt (div (float64 .Throughput) 1048576.0) 4.0)}}color: var(--danger-color);{{else if and (eq .Type "disk") (contains .Name "16KB sequential") (contains .Info "dsync: false") (lt (div (float64 .Throughput) 1048576.0) 30.0)}}color: var(--danger-color);{{end}}">
+                            {{formatBytes .Throughput}}/s
+                        </td>
+                        <td>{{printf "%.0f" .IOPS}} req/s</td>
+                        <td style="font-size: 0.9em;">
+                            {{.LatencyP50}}µs / {{.LatencyP99}}µs
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{end}}
+    </div>
+    {{end}}
 
     <!-- Disk Usage -->
     <div class="card">

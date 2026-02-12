@@ -31,24 +31,20 @@ func (s *Server) segmentViewHandler(w http.ResponseWriter, r *http.Request) {
 	ext := filepath.Ext(fullPath)
 	
 	type PageData struct {
+		BasePageData
 		NodeHostname string
 		FilePath     string
 		FileName     string
 		Type         string
 		Data         interface{}
 		Error        string
-		ActivePath   string
-		LogsOnly     bool
-		Sessions     map[string]*BundleSession
 	}
 
 	data := PageData{
+		BasePageData: s.newBasePageData("Segments"),
 		NodeHostname: s.nodeHostname,
 		FilePath:     relativePath,
 		FileName:     filepath.Base(fullPath),
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
-		Sessions:     s.sessions,
 	}
 
 	if ext == ".log" {

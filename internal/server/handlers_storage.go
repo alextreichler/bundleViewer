@@ -38,19 +38,15 @@ func (s *Server) storageHandler(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(logFiles)
 
 	type StoragePageData struct {
+		BasePageData
 		Files        []string
 		NodeHostname string
-		Sessions     map[string]*BundleSession
-		ActivePath   string
-		LogsOnly     bool
 	}
 
 	pageData := StoragePageData{
+		BasePageData: s.newBasePageData("Segments"),
 		Files:        logFiles,
 		NodeHostname: s.nodeHostname,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

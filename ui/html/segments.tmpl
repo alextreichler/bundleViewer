@@ -9,7 +9,7 @@
 <body>
 	
 	</div>
-    {{template "nav" (dict "Active" "Segments" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
     <h1>Log Segments Inspector</h1>
     <p>Select a binary log segment (.log) to inspect its Record Batch headers.</p>
 

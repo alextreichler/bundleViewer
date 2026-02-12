@@ -66,7 +66,7 @@
             opacity: 1;
         }
     </style>
-    {{template "nav" (dict "Active" "Metrics" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
     <h1>Metrics Overview</h1>
     <h2>Node: {{.NodeHostname}}</h2>
 

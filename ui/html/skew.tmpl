@@ -84,7 +84,7 @@
     </style>
 </head>
 <body>
-    {{template "nav" (dict "Active" "Skew" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
 	<h1>Skew Analysis</h1>
 
     {{if .Analysis.IsClusterSkewed}}

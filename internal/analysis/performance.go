@@ -238,11 +238,9 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	// 3. Small Fetch Detection
 	if fetchCount > 0 {
 		avgFetchSize := sentBytes / fetchCount
-		if avgFetchSize < 500 { // < 500 bytes is very small (likely empty or just headers)
-			report.Observations = append(report.Observations, fmt.Sprintf("Small Fetch Responses detected: Average %.0f bytes. Inefficient polling.", avgFetchSize))
-			if report.IsCPUBound {
-				report.Recommendations = append(report.Recommendations, "High CPU due to excessive fetch polling. Increase 'fetch_reads_debounce_timeout'.")
-			}
+		if avgFetchSize < 500 { // < 500 bytes is very small
+			report.Observations = append(report.Observations, fmt.Sprintf("Warning: 'Empty' Fetch Polls detected. Average response is only %.0f bytes.", avgFetchSize))
+			report.Recommendations = append(report.Recommendations, "Consumers are polling too aggressively. Increase 'fetch_reads_debounce_timeout' in Redpanda or 'fetch.min.bytes' on clients.")
 		}
 	}
 
@@ -250,7 +248,13 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	if produceBatches > 0 {
 		avgBatchSize := writtenBytes / produceBatches
 		report.Observations = append(report.Observations, fmt.Sprintf("Average Batch Size: %.2f KB", avgBatchSize/1024))
-		if avgBatchSize < 10*1024 { // < 10KB
+		
+		// Heuristic: O_DIRECT 4KB Tax
+		if avgBatchSize < 4096 {
+			efficiency := (avgBatchSize / 4096) * 100
+			report.Observations = append(report.Observations, fmt.Sprintf("Warning: Disk IOPS Inflation. Batches are smaller than 4KB block size (Efficiency: %.1f%%). Every write is rounded up to 4KB by the OS.", efficiency))
+			report.Recommendations = append(report.Recommendations, "Increase 'linger.ms' or 'batch.size' on your producers to improve disk efficiency.")
+		} else if avgBatchSize < 10*1024 { // < 10KB
 			report.Observations = append(report.Observations, "Small average batch size detected (< 10KB). High fixed CPU cost.")
 			if report.IsCPUBound {
 				report.Recommendations = append(report.Recommendations, "CPU overhead from small batches. Increase 'linger.ms' on clients.")
@@ -258,20 +262,24 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 		}
 	}
 
-	// 5. Disk Analysis (Queue + Latency)
-	avgDiskLatency := 0.0
+	// 5. Disk Analysis (Queue + Latency + Seastar Throttling)
+	avgDiskExec := 0.0
+	avgSeastarDelay := 0.0
 	if ioOps > 0 {
-		avgDiskLatency = (ioDelaySec + ioExecSec) / ioOps
+		avgDiskExec = (ioExecSec / ioOps) * 1000 // ms
+		avgSeastarDelay = (ioDelaySec / ioOps) * 1000 // ms
 	}
 
 	if maxDiskQueue > 50 {
 		report.Observations = append(report.Observations, fmt.Sprintf("High Disk Queue Length: %.0f.", maxDiskQueue))
-		if avgDiskLatency > 0.020 { // > 20ms
+		
+		if avgDiskExec > 20.0 {
 			report.IsDiskBound = true
-			report.Observations = append(report.Observations, fmt.Sprintf("Critical: Disk Saturation. High Queue + High Latency (%.2f ms).", avgDiskLatency*1000))
-			report.Recommendations = append(report.Recommendations, "Disk cannot keep up. Check IOPS limits or hardware.")
-		} else {
-			report.Observations = append(report.Observations, "Disk queue is high but latency is low. CPU might be the bottleneck (polling less frequently).")
+			report.Observations = append(report.Observations, fmt.Sprintf("Critical: Slow Hardware/Volume. Disk execution time is high (%.2f ms/op).", avgDiskExec))
+			report.Recommendations = append(report.Recommendations, "Physical disk latency is high. Check for EBS throttling, RAID issues, or slow hardware.")
+		} else if avgSeastarDelay > avgDiskExec * 2 {
+			report.Observations = append(report.Observations, fmt.Sprintf("Warning: Seastar Throttling. Seastar is holding IO in userspace for %.2f ms (vs %.2f ms disk time).", avgSeastarDelay, avgDiskExec))
+			report.Recommendations = append(report.Recommendations, "The Seastar IO scheduler is limiting throughput. This usually means 'iotune' values are too conservative for the hardware.")
 		}
 	}
 
@@ -279,18 +287,17 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	if cacheAccesses > 0 {
 		hitRatio := cacheHits / cacheAccesses
 		if hitRatio < 0.8 && report.WorkloadType == "Fetch-Heavy" {
-			report.Observations = append(report.Observations, fmt.Sprintf("Low Batch Cache Hit Ratio: %.2f. Reads are hitting disk.", hitRatio))
-			if report.IsDiskBound {
-				report.Recommendations = append(report.Recommendations, "Disk load due to cache misses. Consumers are reading historical data.")
-			}
+			report.Observations = append(report.Observations, fmt.Sprintf("Warning: Low Batch Cache Hit Ratio (%.1f%%). Readers are hitting disk.", hitRatio*100))
+			report.Recommendations = append(report.Recommendations, "Consumers are reading historical data (stale reads). This stresses the disk and increases latency. Consider increasing 'batch_cache_max_memory'.")
 		}
 	}
 
-	// 7. Stall Detection
-	if reportedStalls > 0 {
-		report.Observations = append(report.Observations, fmt.Sprintf("Reactor Stalls Detected: %.0f reported long stalls (>25ms).", reportedStalls))
-		if report.IsCPUBound {
-			report.Recommendations = append(report.Recommendations, "Stalls indicate tasks are hogging the reactor. Check for 'Reactor stalled' logs.")
+	// 7. Stall Detection and Background CPU
+	if hasSchedulerMetrics {
+		// archivalUploadRuntime, compactionRuntime? (Need to add compaction to gathering)
+		// For now, check if archival is significant
+		if produceRuntime > 0 && archivalUploadRuntime > (produceRuntime * 0.5) {
+			report.Observations = append(report.Observations, "Warning: Background Task Pressure. Tiered Storage uploads are consuming > 50% of the produce CPU time.")
 		}
 	}
 
@@ -310,7 +317,11 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	// Fanout Ratio
 	if networkRx > 0 {
 		fanoutRatio := networkTx / networkRx
-		if fanoutRatio > 3.0 {
+		if fanoutRatio > 5.0 {
+			report.IsNetworkBound = true
+			report.Observations = append(report.Observations, fmt.Sprintf("Critical: Extreme Network Fan-out (%.1fx). You are sending 5x more data than you receive.", fanoutRatio))
+			report.Recommendations = append(report.Recommendations, "High consumer fan-out stresses cloud network limits (the 'haircut'). Consider using private VPC endpoints or reducing consumer counts.")
+		} else if fanoutRatio > 3.0 {
 			report.Observations = append(report.Observations, fmt.Sprintf("High Network Fanout: %.1fx more TX than RX. High consumer load.", fanoutRatio))
 			if report.IsNetworkBound {
 				report.Recommendations = append(report.Recommendations, "High fanout stresses network. Ensure adequate bandwidth.")
@@ -325,6 +336,7 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 		// If upload runtime is significant compared to produce, it's a factor
 		if produceRuntime > 0 && archivalUploadRuntime > (produceRuntime * 0.5) {
 			report.Observations = append(report.Observations, "Heavy Tiered Storage Activity: Uploads consuming significant scheduler time.")
+			report.Recommendations = append(report.Recommendations, "Tiered Storage uploads compete with public consumers for network egress. Monitor cloud provider bandwidth limits.")
 		}
 	}
 
@@ -355,6 +367,15 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 	// Recovery
 	if partitionsToRecover > 0 {
 		report.Observations = append(report.Observations, fmt.Sprintf("Cluster in Recovery: %0.f partitions need recovery. Background traffic will be higher.", partitionsToRecover))
+	}
+
+	// 10. Demand vs Capacity Analysis (The "Upstream" Check)
+	if !report.IsCPUBound && !report.IsDiskBound && !report.IsNetworkBound {
+		// If cluster is healthy and utilization is low, check if it's effectively idle
+		if maxReactorUtil < 20.0 && produceCount > 0 {
+			report.Observations = append(report.Observations, "Cluster Headroom: Redpanda is under-utilized (< 20% CPU). The current throughput appears to be limited by Application Demand, not the cluster.")
+			report.Recommendations = append(report.Recommendations, "If throughput is lower than expected, check producer-side metrics. The bottleneck is likely upstream or in the client's serial send-loop.")
+		}
 	}
 
 	return report

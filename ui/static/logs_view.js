@@ -294,6 +294,9 @@ if (!window.logsViewInitialized) {
                 ${log.linkedMsg}
             </div>`;
 
+            const pinBtnClass = log.isPinned ? 'pin-btn pinned' : 'pin-btn';
+            const pinBtnText = log.isPinned ? '★' : '☆';
+
             tr.innerHTML = `
                 <td style="white-space:nowrap;">${new Date(log.timestamp).toISOString().replace('T', ' ').substring(0, 23)}</td>
                 <td class="log-level-${log.level}">${log.level}</td>
@@ -302,8 +305,11 @@ if (!window.logsViewInitialized) {
                 <td>${log.component}</td>
                 <td style="max-width: 0; width: 40%; overflow: hidden;">${messageHtml}</td>
                 <td>
-                    <button onclick="showLogContext('${log.filePath}', ${log.lineNumber})" style="font-size: 0.8em;">Context</button>
-                    ${actionBtn}
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        <button class="${pinBtnClass}" onclick="togglePin(${i})" title="${log.isPinned ? 'Unpin' : 'Pin to Notebook'}">${pinBtnText}</button>
+                        <button onclick="showLogContext('${log.filePath}', ${log.lineNumber})" style="font-size: 0.8em;">Context</button>
+                        ${actionBtn}
+                    </div>
                 </td>
             `;
 
@@ -461,6 +467,26 @@ async function showLogContext(filePath, lineNumber) {
 function closeLogContext() {
     const modal = document.getElementById('log-context-modal');
     if (modal) modal.style.display = 'none';
+}
+
+async function togglePin(index) {
+    const log = window.allLogs[index];
+    if (!log) return;
+
+    const method = log.isPinned ? 'unpin' : 'pin';
+    const url = `/api/logs/${method}?id=${log.id}`;
+
+    try {
+        const response = await fetch(url, { method: 'POST' });
+        if (response.ok) {
+            log.isPinned = !log.isPinned;
+            window.renderVirtualLogs(true);
+        } else {
+            console.error(`Failed to ${method} log`);
+        }
+    } catch (error) {
+        console.error(`Error during ${method}:`, error);
+    }
 }
 
 // Init

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,8 @@ type CachedData struct {
 	LogsOnly          bool
 	StorageAnalysis   *models.StorageAnalysis
 	TopicThroughput   map[string]float64
+	RedpandaVersion   string
+	SelfTestResults   []models.SelfTestNodeResult
 }
 
 func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTracker) (*CachedData, error) {
@@ -86,6 +89,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 	var redpandaConfig map[string]interface{}
 	var partitionBalancerData models.PartitionBalancerStatus
 	var topicThroughput map[string]float64
+	var selfTestResults []models.SelfTestNodeResult
 
 	// Define tasks
 	tasks := []struct {
@@ -110,7 +114,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				p.Update(0, "Parsing system state...")
 				df, _ := parser.ParseDF(bundlePath)
 				free, _ := parser.ParseFree(bundlePath)
-				top, _ := parser.ParseTop(bundlePath)
+				top, procs, _ := parser.ParseTop(bundlePath)
 				sysctl, _ := parser.ParseSysctl(bundlePath)
 				ntp, _ := parser.ParseNTP(bundlePath)
 				ips, _ := parser.ParseIP(bundlePath)
@@ -128,6 +132,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				lspci, _ := parser.ParseLSPCI(bundlePath)
 				thp, _ := parser.ParseTHP(bundlePath)
 				interrupts, _ := parser.ParseInterrupts(bundlePath)
+				softirqs, _ := parser.ParseSoftIRQs(bundlePath)
 
 				connSummary := models.ConnectionSummary{
 					Total:   len(conns),
@@ -154,12 +159,14 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 
 				systemData = models.SystemState{
 					FileSystems: df, Memory: free, MemInfo: memInfo, Load: top,
+					Processes: procs,
 					Uname: uname, DMI: dmi, Dig: dig, Syslog: syslog,
 					VMStatAnalysis: vmStatTS, LSPCI: lspci, CPU: cpuInfo, Sysctl: sysctl,
 					NTP: ntp, Interfaces: ips, Connections: conns, ConnSummary: connSummary,
 					VMStat: vmStat, MDStat: mdStat, CmdLine: cmdLine, CoreCount: coreCount,
 					TransparentHugePages: thp,
 					Interrupts: interrupts,
+					SoftIRQs: softirqs,
 				}
 				p.Update(1, "System state parsed")
 			},
@@ -237,6 +244,18 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 					}
 				}
 				p.Update(1, "Prometheus metrics parsed")
+			},
+		},
+		{
+			name: "Self-test results",
+			fn: func() {
+				p.Update(0, "Parsing self-test results...")
+				var err error
+				selfTestResults, err = parser.ParseSelfTestResults(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to parse self-test results", "error", err)
+				}
+				p.Update(1, "Self-test results parsed")
 			},
 		},
 		{
@@ -553,6 +572,41 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 		topicDetails[tc.Name] = tc
 	}
 
+	// Detect Redpanda Version
+	var redpandaVersion string
+	for _, file := range adminFiles {
+		if file.FileName == "brokers.json" {
+			if brokers, ok := file.Data.([]interface{}); ok {
+				for _, brokerData := range brokers {
+					if broker, ok := brokerData.(map[string]interface{}); ok {
+						if v, ok := broker["version"].(string); ok && v != "" {
+							redpandaVersion = v
+							break
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+
+	if redpandaVersion == "" {
+		// Try from logs - search only the very beginning of the logs (asc)
+		filter := &models.LogFilter{
+			Search: "\"Welcome to Redpanda v\"",
+			Sort:   "asc",
+			Limit:  1,
+		}
+		logs, _, err := s.GetLogs(filter)
+		if err == nil && len(logs) > 0 {
+			re := regexp.MustCompile(`Welcome to Redpanda v([0-9]+\.[0-9]+\.[0-9]+)`)
+			matches := re.FindStringSubmatch(logs[0].Message)
+			if len(matches) > 1 {
+				redpandaVersion = matches[1]
+			}
+		}
+	}
+
 	return &CachedData{
 		GroupedFiles: groupedFiles, DataDiskFiles: dataDiskFiles, CacheDiskFiles: cacheDiskFiles,
 		Partitions: partitions, Leaders: leaders, KafkaMetadata: kafkaMetadataData,
@@ -562,5 +616,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 		MetricDefinitions: metricDefinitionsData, System: systemData, SarData: sarData,
 		TopicDetails: topicDetails, Store: s, CoreDumps: coreDumps, LogsOnly: logsOnly,
 		StorageAnalysis: storageAnalysisData, TopicThroughput: topicThroughput,
+		RedpandaVersion: redpandaVersion,
+		SelfTestResults: selfTestResults,
 	}, nil
 }

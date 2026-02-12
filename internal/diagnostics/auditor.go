@@ -2,6 +2,8 @@ package diagnostics
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,7 +92,943 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 	// 17. Data Partition on Root
 	results = append(results, checkDataDirPartition(data)...)
 
+	// 18. Public IP / External Haircut Detection
+	results = append(results, checkPublicIPs(data)...)
+
+	// 19. Consumer Parallelism Analysis
+	results = append(results, checkConsumerParallelism(data)...)
+
+	// 20. Shard 0 Administrative Overload
+	results = append(results, checkShard0Overload(s)...)
+
+	// 21. Connection Flapping (Client Churn)
+	results = append(results, checkConnectionFlapping(s)...)
+
+	// 22. Metadata Request Overload
+	results = append(results, checkMetadataOverload(s)...)
+
+	// 23. K8s CPU Steal Time (Overprovisioning)
+	results = append(results, checkCPUStealTime(data, s)...)
+
+	// 24. K8s Shard Optimization (N-1 Tax)
+	results = append(results, checkK8sShardOptimization(data)...)
+
+	// 25. RHEL-8 Sluggish Scheduler (sched_wakeup_granularity_ns)
+	results = append(results, checkSluggishScheduler(data)...)
+
+	// 26. IO Configuration (iotune)
+	results = append(results, checkIOConfiguration(data)...)
+
+	// 27. AIO Context Saturation
+	results = append(results, checkAIOSaturation(s)...)
+
+	// 28. SoftIRQ Imbalance (Network/IO steering)
+	results = append(results, checkSoftIRQImbalance(data)...)
+
+	// 29. AWS GP3 Performance Cliff
+	results = append(results, checkGP3PerformanceCliff(data, s)...)
+
+	// 30. Self-Test Performance Thresholds
+	results = append(results, checkSelfTestPerformance(data)...)
+
+	// 31. Network Concurrency (AIO Control Blocks)
+	results = append(results, checkNetworkConcurrencyLimit(data, s)...)
+
 	return DiagnosticsReport{Results: results}
+}
+
+func checkNetworkConcurrencyLimit(data *cache.CachedData, s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// 1. Determine the limit (default is 10000 if not specified)
+	limit := 10000.0
+	
+	// We need to look in two places:
+	// A) The literal process command line
+	// B) The redpanda.yaml "additional_start_flags" list
+	
+	searchTargets := []string{data.System.CmdLine}
+	for _, v := range data.RedpandaConfig {
+		if s, ok := v.(string); ok {
+			searchTargets = append(searchTargets, s)
+		}
+	}
+
+	re := regexp.MustCompile(`--max-networking-io-control-blocks=(\d+)`)
+	for _, target := range searchTargets {
+		matches := re.FindStringSubmatch(target)
+		if len(matches) > 1 {
+			val, _ := strconv.ParseFloat(matches[1], 64)
+			if val > 0 {
+				limit = val
+				break // Found it
+			}
+		}
+	}
+
+	// 2. Get active connections per shard
+	metrics, err := s.GetMetrics("redpanda_rpc_active_connections", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil || len(metrics) == 0 {
+		return results
+	}
+
+	maxConnsPerShard := 0.0
+	worstShard := ""
+	for _, m := range metrics {
+		if m.Value > maxConnsPerShard {
+			maxConnsPerShard = m.Value
+			// Try various common shard labels
+			if s, ok := m.Labels["shard"]; ok {
+				worstShard = s
+			} else if r, ok := m.Labels["reactor"]; ok {
+				worstShard = r
+			} else if c, ok := m.Labels["cpu"]; ok {
+				worstShard = c
+			}
+		}
+	}
+
+	if maxConnsPerShard > 0 {
+		utilization := (maxConnsPerShard / limit) * 100
+		
+		if utilization > 80.0 {
+			status := SeverityWarning
+			if utilization > 95.0 {
+				status = SeverityCritical
+			}
+
+			results = append(results, CheckResult{
+				Category:      "Network Performance",
+				Name:          "Network AIO Concurrency",
+				Description:   "Active connections are approaching the AIO control block limit",
+				CurrentValue:  fmt.Sprintf("%.0f conns (Limit: %.0f, Shard %s)", maxConnsPerShard, limit, worstShard),
+				ExpectedValue: "< 80% utilization",
+				Status:        status,
+				Remediation:   "Your network concurrency is near the hard limit. Increase '--max-networking-io-control-blocks' (e.g., to 50000) to prevent the network stack from stalling under high connection loads.",
+			})
+		} else {
+			results = append(results, CheckResult{
+				Category:      "Network Performance",
+				Name:          "Network AIO Concurrency",
+				Description:   "Active connections relative to AIO control block limit",
+				CurrentValue:  fmt.Sprintf("%.1f%% utilized", utilization),
+				ExpectedValue: "Healthy",
+				Status:        SeverityPass,
+			})
+		}
+	}
+
+	return results
+}
+
+func checkSelfTestPerformance(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	if len(data.SelfTestResults) == 0 {
+		return results
+	}
+
+	for _, nodeResult := range data.SelfTestResults {
+		for _, test := range nodeResult.Results {
+			if test.Type != "disk" {
+				continue
+			}
+
+			// Small block write threshold: 4 MB/s
+			if strings.Contains(test.Name, "4KB sequential write") && strings.Contains(test.Info, "dsync: true") {
+				throughputMBps := float64(test.Throughput) / (1024 * 1024)
+				if throughputMBps < 4.0 {
+					results = append(results, CheckResult{
+						Category:      "Hardware Performance",
+						Name:          fmt.Sprintf("Disk Write Performance (Small Block) - Node %d", nodeResult.NodeID),
+						Description:   "4KB sequential write throughput is below the minimum supported threshold",
+						CurrentValue:  fmt.Sprintf("%.2f MB/s", throughputMBps),
+						ExpectedValue: ">= 4.00 MB/s",
+						Status:        SeverityCritical,
+						Remediation:   "Your disk does not meet the minimum performance threshold for small block writes (dsync: true). This will cause high latency and low throughput. Check your storage subsystem (EBS type, RAID config, etc.).",
+					})
+				} else {
+					results = append(results, CheckResult{
+						Category:      "Hardware Performance",
+						Name:          fmt.Sprintf("Disk Write Performance (Small Block) - Node %d", nodeResult.NodeID),
+						Description:   "4KB sequential write throughput",
+						CurrentValue:  fmt.Sprintf("%.2f MB/s", throughputMBps),
+						ExpectedValue: ">= 4.00 MB/s",
+						Status:        SeverityPass,
+					})
+				}
+			}
+
+			// Medium block write threshold: 30 MB/s
+			if strings.Contains(test.Name, "16KB sequential") && strings.Contains(test.Info, "dsync: false") {
+				throughputMBps := float64(test.Throughput) / (1024 * 1024)
+				if throughputMBps < 30.0 {
+					results = append(results, CheckResult{
+						Category:      "Hardware Performance",
+						Name:          fmt.Sprintf("Disk Write Performance (Medium Block) - Node %d", nodeResult.NodeID),
+						Description:   "16KB sequential write throughput is below the minimum supported threshold",
+						CurrentValue:  fmt.Sprintf("%.2f MB/s", throughputMBps),
+						ExpectedValue: ">= 30.00 MB/s",
+						Status:        SeverityCritical,
+						Remediation:   "Your disk does not meet the minimum performance threshold for medium block writes. This indicates your disk throughput is insufficient for production Redpanda workloads.",
+					})
+				} else {
+					results = append(results, CheckResult{
+						Category:      "Hardware Performance",
+						Name:          fmt.Sprintf("Disk Write Performance (Medium Block) - Node %d", nodeResult.NodeID),
+						Description:   "16KB sequential write throughput",
+						CurrentValue:  fmt.Sprintf("%.2f MB/s", throughputMBps),
+						ExpectedValue: ">= 30.00 MB/s",
+						Status:        SeverityPass,
+					})
+				}
+			}
+		}
+	}
+
+	return results
+}
+
+func checkGP3PerformanceCliff(data *cache.CachedData, s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// Only relevant for AWS
+	if data.System.Uname.CloudProvider != "AWS" {
+		return results
+	}
+
+	// 1. Get configured limits from RedpandaConfig (iotune output)
+	var limitIOPS float64
+	if val, ok := data.RedpandaConfig["redpanda.write_iops"]; ok {
+		if s, ok := val.(string); ok {
+			limitIOPS, _ = strconv.ParseFloat(s, 64)
+		}
+	}
+	if _, ok := data.RedpandaConfig["redpanda.write_bandwidth"]; ok {
+		// (Bandwidth check could be added here in the future)
+	}
+
+	if limitIOPS == 0 {
+		return results
+	}
+
+	// 2. Get current usage metrics
+	metrics, err := s.GetMetrics("vectorized_io_queue_total_write_ops", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil || len(metrics) < 2 {
+		return results
+	}
+
+	// Calculate current IOPS rate
+	var totalCurrentIOPS float64
+	// Group by shard and calculate rate
+	shardMetrics := make(map[string][]models.PrometheusMetric)
+	for _, m := range metrics {
+		shard := m.Labels["shard"]
+		shardMetrics[shard] = append(shardMetrics[shard], *m)
+	}
+
+	for _, ms := range shardMetrics {
+		if len(ms) >= 2 {
+			first, last := ms[0], ms[len(ms)-1]
+			dur := last.Timestamp.Sub(first.Timestamp).Seconds()
+			if dur > 0 {
+				totalCurrentIOPS += (last.Value - first.Value) / dur
+			}
+		}
+	}
+
+	if totalCurrentIOPS > 0 {
+		utilization := (totalCurrentIOPS / limitIOPS) * 100
+		
+		// The document says performance breaks down at 70% of IOPS
+		if utilization > 70.0 {
+			results = append(results, CheckResult{
+				Category:      "Disk Performance",
+				Name:          "AWS GP3 IOPS Cliff",
+				Description:   "EBS gp3 volumes experience high tail latency above 70% utilization",
+				CurrentValue:  fmt.Sprintf("%.1f%% IOPS Util", utilization),
+				ExpectedValue: "< 70%",
+				Status:        SeverityWarning,
+				Remediation:   "AWS gp3 volumes often 'fall off a cliff' at 70% IOPS capacity. Increase volume IOPS or switch to io2/Block Express for consistent tail latencies.",
+			})
+		}
+	}
+
+	return results
+}
+
+func checkSoftIRQImbalance(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	if len(data.System.SoftIRQs.Entries) == 0 {
+		return results
+	}
+
+	for _, entry := range data.System.SoftIRQs.Entries {
+		if entry.IRQID != "NET_RX" && entry.IRQID != "BLOCK" {
+			continue
+		}
+
+		// Calculate distribution
+		var total int64
+		var activeCores int
+		for _, count := range entry.CPUCounts {
+			total += count
+			if count > (total / int64(len(entry.CPUCounts)) / 10) { // More than 10% of avg
+				activeCores++
+			}
+		}
+
+		if total < 1000000 {
+			continue // Ignore low volume clusters
+		}
+
+		numCPUs := len(entry.CPUCounts)
+		activePct := (float64(activeCores) / float64(numCPUs)) * 100
+
+		// If < 10% of cores are doing 90% of the work on a large machine
+		if activePct < 10.0 && numCPUs > 16 {
+			results = append(results, CheckResult{
+				Category:      "Kernel Performance",
+				Name:          fmt.Sprintf("SoftIRQ Imbalance (%s)", entry.IRQID),
+				Description:   fmt.Sprintf("%s interrupts are concentrated on only %d/%d cores", entry.IRQID, activeCores, numCPUs),
+				CurrentValue:  fmt.Sprintf("%.1f%% core utilization", activePct),
+				ExpectedValue: "> 25% core distribution",
+				Status:        SeverityWarning,
+				Remediation:   fmt.Sprintf("Kernel %s processing is bottlenecked on a few cores. This limits aggregate throughput. Check 'rpk redpanda tune network' or RPS/XPS settings.", entry.IRQID),
+			})
+		} else {
+			results = append(results, CheckResult{
+				Category:      "Kernel Performance",
+				Name:          fmt.Sprintf("SoftIRQ Imbalance (%s)", entry.IRQID),
+				Description:   fmt.Sprintf("%s interrupt distribution across %d cores", entry.IRQID, numCPUs),
+				CurrentValue:  fmt.Sprintf("%.1f%% core distribution", activePct),
+				ExpectedValue: "Distributed",
+				Status:        SeverityPass,
+			})
+		}
+	}
+
+	return results
+}
+
+func checkIOConfiguration(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	// Check for iotune properties in redpanda.yaml or specific keys
+	// Common default values often seen when iotune hasn't run or is conservative
+	isDefault := false
+	hasIOConfig := false
+
+	keys := []string{
+		"redpanda.developer_mode",
+		"redpanda.read_iops",
+		"redpanda.write_iops",
+		"redpanda.read_bandwidth",
+		"redpanda.write_bandwidth",
+	}
+
+	for _, k := range keys {
+		if _, ok := data.RedpandaConfig[k]; ok {
+			hasIOConfig = true
+		}
+	}
+
+	// Heuristic: Check for common "round" default numbers
+	if val, ok := data.RedpandaConfig["redpanda.read_iops"]; ok {
+		if s, ok := val.(string); ok && (s == "10000" || s == "1000") {
+			isDefault = true
+		}
+	}
+
+	if !hasIOConfig {
+		results = append(results, CheckResult{
+			Category:      "Disk Performance",
+			Name:          "IO Properties Missing",
+			Description:   "Disk IO performance properties (iotune) are not configured",
+			CurrentValue:  "None",
+			ExpectedValue: "Configured via 'rpk iotune'",
+			Status:        SeverityWarning,
+			Remediation:   "Run 'rpk redpanda tune all' or 'rpk iotune' to benchmark your disks. Without this, Redpanda uses conservative defaults that will limit throughput.",
+		})
+	} else if isDefault {
+		results = append(results, CheckResult{
+			Category:      "Disk Performance",
+			Name:          "Default IO Properties",
+			Description:   "Redpanda appears to be using default/conservative IO limits",
+			CurrentValue:  "Default Values Found",
+			ExpectedValue: "Hardware-specific values",
+			Status:        SeverityInfo,
+			Remediation:   "The configured IOPS/Bandwidth look like defaults. Ensure 'rpk iotune' was run on the production hardware.",
+		})
+	}
+
+	// Check for Max Cost Function
+	if val, ok := data.RedpandaConfig["redpanda.max_cost_function"]; ok {
+		if s, ok := val.(string); ok && strings.ToLower(s) == "false" {
+			results = append(results, CheckResult{
+				Category:      "Disk Performance",
+				Name:          "IO Cost Function",
+				Description:   "Standard Seastar cost function is used instead of Max",
+				CurrentValue:  "max_cost_function: false",
+				ExpectedValue: "true",
+				Status:        SeverityWarning,
+				Remediation:   "Redpanda's 'max' cost function models disks better. Disabling it can lead to significant IO under-utilization.",
+			})
+		}
+	}
+
+	return results
+}
+
+func checkAIOSaturation(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// The hard limit is 1024 per shard for linux-aio
+	metrics, err := s.GetMetrics("vectorized_io_queue_queue_length", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil {
+		return results
+	}
+
+	maxQueue := 0.0
+	worstShard := ""
+	for _, m := range metrics {
+		if m.Value > maxQueue {
+			maxQueue = m.Value
+			worstShard = m.Labels["shard"]
+		}
+	}
+
+	if maxQueue >= 1000.0 { // Near the 1024 limit
+		status := SeverityWarning
+		if maxQueue >= 1024.0 {
+			status = SeverityCritical
+		}
+
+		results = append(results, CheckResult{
+			Category:      "Disk Performance",
+			Name:          "AIO Context Saturation",
+			Description:   "IO requests are hitting the hard limit of the AIO sink",
+			CurrentValue:  fmt.Sprintf("%.0f requests (Shard %s)", maxQueue, worstShard),
+			ExpectedValue: "< 1024",
+			Status:        status,
+			Remediation:   "The shard is submitting IO faster than the kernel context can handle (1024 limit). This indicates an IO bottleneck in the kernel or extremely small IO sizes. Check for 'Reactor stalled' logs.",
+		})
+	}
+
+	return results
+}
+
+func checkSluggishScheduler(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	valStr, exists := data.System.Sysctl["kernel.sched_wakeup_granularity_ns"]
+	if !exists {
+		return results
+	}
+
+	val, _ := strconv.Atoi(valStr)
+	if val < 10000000 {
+		return results // Granularity is healthy
+	}
+
+	isRHEL8 := data.System.Uname.Distro == "RHEL/CentOS 8"
+	
+	// Check Redpanda version for auto-mitigation (starting 25.1.5)
+	version := data.RedpandaVersion
+	hasAutoMitigation := false
+	if version != "" {
+		hasAutoMitigation = isVersionGreaterOrEqual(version, "25.1.5")
+	}
+
+	status := SeverityWarning
+	if !hasAutoMitigation {
+		status = SeverityCritical
+	}
+
+	desc := "Scheduler wakeup granularity is too high"
+	if isRHEL8 {
+		desc += " (known RHEL-8 'tuned' issue)"
+	}
+
+	remediation := "High granularity prevents Redpanda threads from yielding to kernel IO threads, causing extremely poor IOPS. "
+	if isRHEL8 {
+		remediation += "This is caused by the default 'tuned' profile on RHEL-8. "
+	}
+	remediation += "Action: Set 'kernel.sched_wakeup_granularity_ns' to 4000000 or use '--overprovisioned' mode."
+	
+	if hasAutoMitigation {
+		remediation += " Note: Your Redpanda version has auto-mitigation, but the underlying OS setting is still high."
+	}
+
+	results = append(results, CheckResult{
+		Category:      "OS Tuning",
+		Name:          "kernel.sched_wakeup_granularity_ns",
+		Description:   desc,
+		CurrentValue:  fmt.Sprintf("%d ns", val),
+		ExpectedValue: "< 10000000 ns",
+		Status:        status,
+		Remediation:   remediation,
+	})
+
+	return results
+}
+
+func isVersionGreaterOrEqual(current, target string) bool {
+	// Simple semver comparison for major.minor.patch
+	currParts := strings.Split(strings.TrimPrefix(current, "v"), ".")
+	targetParts := strings.Split(target, ".")
+
+	for i := 0; i < len(currParts) && i < len(targetParts); i++ {
+		c, _ := strconv.Atoi(currParts[i])
+		t, _ := strconv.Atoi(targetParts[i])
+		if c > t {
+			return true
+		}
+		if c < t {
+			return false
+		}
+	}
+	return len(currParts) >= len(targetParts)
+}
+
+func checkCPUStealTime(data *cache.CachedData, s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// Get steal time metrics
+	metrics, err := s.GetMetrics("vectorized_reactor_cpu_steal_time_ms", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil || len(metrics) < 2 {
+		return results
+	}
+
+	// Group by shard to find the worst offender
+	shardSteal := make(map[string][]models.PrometheusMetric)
+	for _, m := range metrics {
+		shard := m.Labels["shard"]
+		shardSteal[shard] = append(shardSteal[shard], *m)
+	}
+
+	maxRate := 0.0
+	worstShard := ""
+
+	for shard, ms := range shardSteal {
+		if len(ms) < 2 {
+			continue
+		}
+		// Calculate rate between first and last sample in the bundle
+		first := ms[0]
+		last := ms[len(ms)-1]
+		
+		duration := last.Timestamp.Sub(first.Timestamp).Seconds()
+		if duration > 0 {
+			rate := (last.Value - first.Value) / duration
+			if rate > maxRate {
+				maxRate = rate
+				worstShard = shard
+			}
+		}
+	}
+
+	maxRateMs := maxRate
+	if maxRate > 1000.0 {
+		// Values > 1000 in a per-second rate likely mean the metric is actually in microseconds
+		maxRateMs = maxRate / 1000.0
+	}
+
+	if maxRateMs > 10.0 { // > 10ms per second stolen
+		status := SeverityWarning
+		if maxRateMs > 100.0 {
+			status = SeverityCritical
+		}
+
+		remediation := "CPU Steal occurs when the host OS or hypervisor takes CPU cycles away from Redpanda. This causes unpredictable latency spikes and performance degradation.\n\n" +
+			"Actionable Steps:\n" +
+			"• Dedicated Nodes: Use Kubernetes taints/tolerations to ensure Redpanda has exclusive access to the node's CPUs.\n" +
+			"• CPU Pinning: Set 'requests' equal to 'limits' to enable the 'Guaranteed' QoS class, which helps the Kubelet's CPU Manager isolate Redpanda.\n" +
+			"• Overprovisioned Mode: If sharing nodes is necessary, enable '--overprovisioned' (or 'redpanda.overprovisioned: true'). This stops Redpanda from busy-spinning on the CPU, reducing contention with other processes.\n" +
+			"• Resolve Noisy Neighbors: Investigate the busy processes listed below."
+		
+		// Try to identify noisy neighbors from process list
+		neighborCounts := make(map[string]int)
+		neighborCPUs := make(map[string]float64)
+		for _, p := range data.System.Processes {
+			if p.CPU > 5.0 { // > 5% CPU
+				cmd := strings.ToLower(p.Command)
+				// Filter out Redpanda and common kernel noise
+				isRP := strings.Contains(cmd, "redpanda") || strings.Contains(cmd, "rp_") || strings.Contains(cmd, "reactor")
+				isKernel := strings.HasPrefix(cmd, "[") && strings.HasSuffix(cmd, "]")
+				
+				if !isRP && !isKernel {
+					neighborCounts[p.Command]++
+					neighborCPUs[p.Command] += p.CPU
+				}
+			}
+		}
+
+		if len(neighborCounts) > 0 {
+			type neighbor struct {
+				name string
+				cpu  float64
+				text string
+			}
+			var list []neighbor
+			for cmd, count := range neighborCounts {
+				avgCPU := neighborCPUs[cmd] / float64(count)
+				text := ""
+				if count > 1 {
+					text = fmt.Sprintf("• %s x%d (avg %.1f%% CPU)", cmd, count, avgCPU)
+				} else {
+					text = fmt.Sprintf("• %s (%.1f%% CPU)", cmd, avgCPU)
+				}
+				list = append(list, neighbor{cmd, neighborCPUs[cmd], text})
+			}
+			
+			sort.Slice(list, func(i, j int) bool {
+				return list[i].cpu > list[j].cpu
+			})
+
+			var busyNeighbors []string
+			for _, n := range list {
+				busyNeighbors = append(busyNeighbors, n.text)
+			}
+			remediation = fmt.Sprintf("%s\n\nDetected Noisy Neighbors:\n%s", remediation, strings.Join(busyNeighbors, "\n"))
+		}
+
+		results = append(results, CheckResult{
+			Category:      "Kubernetes Performance",
+			Name:          "High CPU Steal Time",
+			Description:   "The OS is taking CPU cycles away from Redpanda shards",
+			CurrentValue:  fmt.Sprintf("%.1f ms/sec (Shard %s)", maxRateMs, worstShard),
+			ExpectedValue: "< 10 ms/sec",
+			Status:        status,
+			Remediation:   remediation,
+		})
+	}
+
+	return results
+}
+
+func checkK8sShardOptimization(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	if !data.System.Uname.IsContainer || data.System.CoreCount == 0 {
+		return results
+	}
+
+	// Determine shard count from leaders or metrics
+	// (Safest way is to check the max shard ID seen in any metric)
+	// For now, we can use HealthOverview if we added it, or assume from core count if we find --smp
+	
+	smpVal := 0
+	if val, ok := data.RedpandaConfig["redpanda.smp"]; ok {
+		if s, ok := val.(string); ok {
+			smpVal, _ = strconv.Atoi(s)
+		} else if i, ok := val.(int); ok {
+			smpVal = i
+		}
+	}
+
+	if smpVal == 0 {
+		return results // Could not determine shard count
+	}
+
+	hostCores := data.System.CoreCount
+	
+	if smpVal >= hostCores && hostCores > 1 {
+		results = append(results, CheckResult{
+			Category:      "Kubernetes Performance",
+			Name:          "K8s Shard Tax (N-1)",
+			Description:   "Redpanda is using all host cores as shards in a container",
+			CurrentValue:  fmt.Sprintf("%d shards on %d cores", smpVal, hostCores),
+			ExpectedValue: fmt.Sprintf("%d shards (N-1)", hostCores-1),
+			Status:        SeverityWarning,
+			Remediation:   "In K8s, it is recommended to run Redpanda with N-1 shards (e.g., --smp=3 on a 4-core machine) to leave room for the Kubelet and system processes.",
+		})
+	} else if hostCores > 32 && smpVal < 8 {
+		results = append(results, CheckResult{
+			Category:      "Kubernetes Performance",
+			Name:          "Large Core Sparse Allocation",
+			Description:   "Small shard count on a very large host",
+			CurrentValue:  fmt.Sprintf("%d shards on %d cores", smpVal, hostCores),
+			ExpectedValue: "Use '--overprovisioned'",
+			Status:        SeverityInfo,
+			Remediation:   "On large core machines (>32 cores), sparse shard allocation can lead to IOPS issues. Ensure '--overprovisioned' is enabled.",
+		})
+	}
+
+	return results
+}
+
+func checkConnectionFlapping(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// Search for high frequency of new connections in logs
+	entries, _, err := s.GetLogs(&models.LogFilter{
+		Search: "Accepted new connection",
+		Limit:  100,
+	})
+
+	if err == nil && len(entries) >= 50 {
+		// If we found 50+ connection logs, check the time spread
+		first := entries[len(entries)-1].Timestamp
+		last := entries[0].Timestamp
+		duration := last.Sub(first)
+
+		// If 50 connections happened in < 10 seconds
+		if duration > 0 && duration < 10*time.Second {
+			results = append(results, CheckResult{
+				Category:      "Client Behavior",
+				Name:          "High Connection Churn",
+				Description:   "Clients are connecting/disconnecting at a high rate",
+				CurrentValue:  fmt.Sprintf("%.1f conns/sec", float64(len(entries))/duration.Seconds()),
+				ExpectedValue: "< 1 conn/sec",
+				Status:        SeverityWarning,
+				Remediation:   "High connection churn increases CPU usage and producer latency. Ensure clients are reusing producer/consumer instances instead of creating them per-message.",
+			})
+		}
+	}
+
+	return results
+}
+
+func checkMetadataOverload(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// Get Metadata vs Produce request counts
+	metrics, err := s.GetMetrics("redpanda_kafka_request_latency_seconds_count", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil {
+		return results
+	}
+
+	var metadataCount, produceCount float64
+	for _, m := range metrics {
+		handler := m.Labels["request"]
+		if handler == "metadata" {
+			metadataCount += m.Value
+		} else if handler == "produce" {
+			produceCount += m.Value
+		}
+	}
+
+	if produceCount > 1000 { // Only check if there's meaningful traffic
+		ratio := metadataCount / produceCount
+		if ratio > 0.1 { // > 10% ratio
+			results = append(results, CheckResult{
+				Category:      "Client Behavior",
+				Name:          "Metadata Request Overload",
+				Description:   "Producers are requesting metadata excessively relative to data",
+				CurrentValue:  fmt.Sprintf("%.1f%% of produce rate", ratio*100),
+				ExpectedValue: "< 1%",
+				Status:        SeverityWarning,
+				Remediation:   "Producers block application threads when fetching metadata. High metadata rates suggest client-side timeouts or cluster instability. Check 'metadata_dissemination_interval_ms'.",
+			})
+		}
+	}
+
+	return results
+}
+
+func checkConsumerParallelism(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	for groupName, group := range data.ConsumerGroups {
+		if group.State == "Empty" || len(group.Members) == 0 {
+			continue
+		}
+
+		// Check each topic this group is consuming
+		topicsChecked := make(map[string]bool)
+		for _, member := range group.Members {
+			for topicName := range member.Assigned {
+				if topicsChecked[topicName] {
+					continue
+				}
+				topicsChecked[topicName] = true
+
+				// Find partition count for this topic
+				var partitionCount int
+				if topic, ok := data.KafkaMetadata.Topics[topicName]; ok {
+					partitionCount = len(topic.Partitions)
+				}
+
+				if partitionCount > 0 {
+					memberCount := len(group.Members)
+					if memberCount < partitionCount {
+						results = append(results, CheckResult{
+							Category:      "Consumer Efficiency",
+							Name:          fmt.Sprintf("Under-provisioned Consumer (%s)", groupName),
+							Description:   fmt.Sprintf("Group has fewer members (%d) than partitions (%d) in topic %s", memberCount, partitionCount, topicName),
+							CurrentValue:  fmt.Sprintf("%d members", memberCount),
+							ExpectedValue: fmt.Sprintf("%d members (min)", partitionCount),
+							Status:        SeverityInfo,
+							Remediation:   "Add more consumer instances to process partitions in parallel and increase throughput ceiling.",
+						})
+					} else if memberCount > partitionCount {
+						results = append(results, CheckResult{
+							Category:      "Consumer Efficiency",
+							Name:          fmt.Sprintf("Over-provisioned Consumer (%s)", groupName),
+							Description:   fmt.Sprintf("Group has more members (%d) than partitions (%d). Extra members are idle.", memberCount, partitionCount),
+							CurrentValue:  fmt.Sprintf("%d members", memberCount),
+							ExpectedValue: fmt.Sprintf("%d members", partitionCount),
+							Status:        SeverityInfo,
+							Remediation:   "Scale down consumer count or increase partition count to utilize all members.",
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return results
+}
+
+func checkShard0Overload(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// Use recent metrics to check shard utilization
+	metrics, err := s.GetMetrics("vectorized_reactor_utilization", nil, time.Time{}, time.Time{}, 0, 0)
+	if err != nil || len(metrics) < 2 {
+		return results
+	}
+
+	var shard0Util float64
+	var otherSum float64
+	var otherCount int
+
+	for _, m := range metrics {
+		shard := m.Labels["shard"]
+		if shard == "0" {
+			shard0Util = m.Value
+		} else {
+			otherSum += m.Value
+			otherCount++
+		}
+	}
+
+	if otherCount > 0 {
+		avgOther := otherSum / float64(otherCount)
+		// If shard 0 is 30% higher than average, flag it
+		if shard0Util > (avgOther + 30.0) && shard0Util > 50.0 {
+			results = append(results, CheckResult{
+				Category:      "CPU Balance",
+				Name:          "Shard 0 Overload",
+				Description:   "Shard 0 is significantly busier than other shards",
+				CurrentValue:  fmt.Sprintf("%.1f%% (Avg others: %.1f%%)", shard0Util, avgOther),
+				ExpectedValue: "Balanced (< 30% delta)",
+				Status:        SeverityWarning,
+				Remediation:   "Shard 0 handles administrative tasks. If it is overloaded, cluster-wide latency and management operations (like rebalancing) may be delayed.",
+			})
+		}
+	}
+
+	return results
+}
+
+func checkPublicIPs(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+
+	// Collect all unique advertised addresses
+	publicAddrs := make(map[string]bool)
+	
+	// 1. Check from Config
+	keys := []string{"advertised_kafka_api", "advertised_rpc_api", "advertised_pandaproxy_api"}
+	for _, k := range keys {
+		if val, ok := data.RedpandaConfig[k]; ok {
+			if s, ok := val.(string); ok {
+				// Handle lists or single values
+				parts := strings.Split(s, ",")
+				for _, p := range parts {
+					addr := strings.TrimSpace(p)
+					if idx := strings.LastIndex(addr, ":"); idx != -1 {
+						addr = addr[:idx]
+					}
+					if isPublicIP(addr) {
+						publicAddrs[addr] = true
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Check from Metadata (What the cluster actually reports)
+	for _, b := range data.KafkaMetadata.Brokers {
+		if isPublicIP(b.Host) {
+			publicAddrs[b.Host] = true
+		}
+	}
+
+	if len(publicAddrs) > 0 {
+		var addrList []string
+		for addr := range publicAddrs {
+			addrList = append(addrList, addr)
+		}
+
+		remediation := "Use private VPC IP addresses for internal communication. "
+		if data.System.Uname.CloudProvider == "AWS" {
+			remediation += "AWS imposes a 50% bandwidth 'haircut' on traffic using public IPs, even within the same VPC."
+		} else if data.System.Uname.CloudProvider == "GCP" {
+			remediation += "GCP limits public IP egress to 7 Gbps regardless of instance size."
+		} else {
+			remediation += "Using public IPs for cluster communication often incurs significant bandwidth penalties and latency on cloud providers."
+		}
+
+		results = append(results, CheckResult{
+			Category:      "Network Configuration",
+			Name:          "Public Advertised Addresses",
+			Description:   "Redpanda is advertising public IP addresses for its APIs",
+			CurrentValue:  strings.Join(addrList, ", "),
+			ExpectedValue: "Private IPs (RFC1918)",
+			Status:        SeverityWarning,
+			Remediation:   remediation,
+		})
+	} else {
+		results = append(results, CheckResult{
+			Category:      "Network Configuration",
+			Name:          "Public Advertised Addresses",
+			Description:   "Redpanda is advertising public IP addresses for its APIs",
+			CurrentValue:  "None (Private IPs used)",
+			ExpectedValue: "Private IPs (RFC1918)",
+			Status:        SeverityPass,
+		})
+	}
+
+	return results
+}
+
+func isPublicIP(ip string) bool {
+	if ip == "" || ip == "localhost" || ip == "127.0.0.1" || ip == "::1" || strings.HasSuffix(ip, ".local") {
+		return false
+	}
+
+	// If it's a hostname (contains dots but no numbers), it's hard to tell without DNS, 
+	// but usually public if it's not a shortname. 
+	// For simplicity, let's focus on literal IPs.
+	
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false // Not an IPv4 literal
+	}
+
+	p1, _ := strconv.Atoi(parts[0])
+	p2, _ := strconv.Atoi(parts[1])
+
+	// RFC1918 Private Ranges
+	if p1 == 10 {
+		return false
+	}
+	if p1 == 172 && p2 >= 16 && p2 <= 31 {
+		return false
+	}
+	if p1 == 192 && p2 == 168 {
+		return false
+	}
+	
+	// Carrier Grade NAT
+	if p1 == 100 && p2 >= 64 && p2 <= 127 {
+		return false
+	}
+
+	return true // It's a public IP
 }
 
 func checkLogErrors(s store.Store) []CheckResult {
@@ -98,7 +1036,7 @@ func checkLogErrors(s store.Store) []CheckResult {
 
 	// 1. Partition Rebalance Failures
 	entries, _, err := s.GetLogs(&models.LogFilter{
-		Search: "No nodes are available to perform allocation",
+		Search: "no nodes are available to perform allocation",
 		Limit:  1,
 	})
 	if err == nil && len(entries) > 0 {

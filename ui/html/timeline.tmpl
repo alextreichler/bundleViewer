@@ -108,7 +108,7 @@
 </head>
 <body>
     					
-    					</div>    	    {{template "nav" (dict "Active" "Timeline" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    					</div>    	    {{template "nav" .}}
     		<h1>Event Timeline</h1>    <p>Chronological view of critical errors, warnings, and system events.</p>
 
     <div id="timeline-content" hx-get="/api/timeline/data" hx-trigger="load" hx-swap="outerHTML">

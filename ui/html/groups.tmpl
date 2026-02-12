@@ -6,7 +6,7 @@
     <script src="/static/theme.js"></script>
 </head>
 <body>
-    {{template "nav" (dict "Active" "Groups" "Sessions" .Sessions "ActivePath" .ActivePath "LogsOnly" .LogsOnly)}}
+    {{template "nav" .}}
     <div class="container">
         <h1>Consumer Groups</h1>
 

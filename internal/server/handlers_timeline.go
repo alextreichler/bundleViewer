@@ -18,13 +18,18 @@ func (s *Server) timelineHandler(w http.ResponseWriter, r *http.Request) {
 	defer builderPool.Put(buf)
 
 	// Render the full page with "Loading..." state
-	err := s.timelineTemplate.Execute(buf, map[string]interface{}{
-		"NodeHostname": s.nodeHostname,
-		"Partial":      false,
-		"Sessions":     s.sessions,
-		"ActivePath":   s.activePath,
-		"LogsOnly":     s.logsOnly,
-	})
+	data := s.newBasePageData("Timeline")
+	pageData := struct {
+		BasePageData
+		NodeHostname string
+		Partial      bool
+	}{
+		BasePageData: data,
+		NodeHostname: s.nodeHostname,
+		Partial:      false,
+	}
+
+	err := s.timelineTemplate.Execute(buf, pageData)
 	if err != nil {
 		s.logger.Error("Error executing timeline template", "error", err)
 		http.Error(w, "Failed to execute timeline template", http.StatusInternalServerError)
@@ -137,14 +142,21 @@ func (s *Server) apiTimelineDataHandler(w http.ResponseWriter, r *http.Request) 
 
 	buf.Grow(8192)
 
-	err = s.timelineTemplate.Execute(buf, map[string]interface{}{
-		"NodeHostname": s.nodeHostname,
-		"Events":       events,
-		"Partial":      true,
-		"Sessions":     s.sessions,
-		"ActivePath":   s.activePath,
-		"LogsOnly":     s.logsOnly,
-	})
+	type TimelinePageData struct {
+		BasePageData
+		NodeHostname string
+		Events       []timeline.TimelineEvent
+		Partial      bool
+	}
+
+	data := TimelinePageData{
+		BasePageData: s.newBasePageData("Timeline"),
+		NodeHostname: s.nodeHostname,
+		Events:       events,
+		Partial:      true,
+	}
+
+	err = s.timelineTemplate.Execute(buf, data)
 	if err != nil {
 		s.logger.Error("Error executing timeline template (partial)", "error", err)
 		http.Error(w, "Failed to execute timeline template", http.StatusInternalServerError)

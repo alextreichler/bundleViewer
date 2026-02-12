@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -402,14 +403,51 @@ func ParseMDStat(bundlePath string) (models.MDStat, error) {
 	return stat, nil
 }
 
-// ParseCmdLine parses /proc/cmdline
+// ParseCmdLine parses Redpanda process command line, handling various bundle formats
 func ParseCmdLine(bundlePath string) (string, error) {
-	filePath := filepath.Join(bundlePath, "proc", "cmdline")
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", err
+	// 1. Try common locations for the Redpanda process command line
+	candidates := []string{
+		filepath.Join(bundlePath, "proc", "cmdline"),      // Generic capture
+		filepath.Join(bundlePath, "redpanda.cmdline"),     // Direct capture
 	}
-	return strings.TrimSpace(string(data)), nil
+
+	// Also look for any proc/<number>/cmdline files
+	matches, _ := filepath.Glob(filepath.Join(bundlePath, "proc", "*", "cmdline"))
+	candidates = append(candidates, matches...)
+
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		// Linux /proc/PID/cmdline uses null bytes (\0) as separators.
+		// Replace them with spaces so regex/searches work.
+		s := string(data)
+		s = strings.ReplaceAll(s, "\x00", " ")
+		s = strings.TrimSpace(s)
+
+		// Check if this looks like a Redpanda command line (heuristic)
+		if strings.Contains(s, "redpanda") {
+			return s, nil
+		}
+	}
+
+	// 2. Fallback: Try to find it in the first few lines of the log
+	logPath := filepath.Join(bundlePath, "redpanda.log")
+	if f, err := os.Open(logPath); err == nil {
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		for i := 0; i < 200 && scanner.Scan(); i++ {
+			line := scanner.Text()
+			// Redpanda often logs: "command line: [ ... ]"
+			if strings.Contains(line, "command line:") {
+				return line, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("redpanda command line not found")
 }
 
 // ParseDF parses the df.txt file, falling back to /proc/mounts if missing.
@@ -553,34 +591,64 @@ func parseKB(s string) int64 {
 }
 
 // ParseTop parses the top.txt file to extract load average
-func ParseTop(bundlePath string) (models.LoadAvg, error) {
+// ParseTop parses the top.txt file to extract load average and top processes
+func ParseTop(bundlePath string) (models.LoadAvg, []models.Process, error) {
 	filePath := filepath.Join(bundlePath, "utils", "top.txt")
 	file, err := os.Open(filePath)
 	if err != nil {
-		return models.LoadAvg{}, err
+		return models.LoadAvg{}, nil, err
 	}
 	defer func() { _ = file.Close() }()
 
+	var load models.LoadAvg
+	var processes []models.Process
 	scanner := bufio.NewScanner(file)
-	if scanner.Scan() {
+	
+	headerFound := false
+	
+	for scanner.Scan() {
 		line := scanner.Text()
-		// top - 15:18:12 up 34 days, 20 min,  3 users,  load average: 66.85, 59.87, 60.92
-		if idx := strings.Index(line, "load average:"); idx != -1 {
+		
+		// 1. Parse Load Average (usually first line)
+		if strings.Contains(line, "load average:") {
+			idx := strings.Index(line, "load average:")
 			loadStr := line[idx+13:]
 			parts := strings.Split(loadStr, ",")
 			if len(parts) >= 3 {
-				one, _ := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-				five, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-				fifteen, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
-				return models.LoadAvg{
-					OneMin:     one,
-					FiveMin:    five,
-					FifteenMin: fifteen,
-				}, nil
+				load.OneMin, _ = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+				load.FiveMin, _ = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+				load.FifteenMin, _ = strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+			}
+			continue
+		}
+
+		// 2. Identify Process Header
+		// PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+		if strings.Contains(line, "PID") && strings.Contains(line, "USER") && strings.Contains(line, "%CPU") {
+			headerFound = true
+			continue
+		}
+
+		// 3. Parse Process Rows
+		if headerFound {
+			fields := strings.Fields(line)
+			if len(fields) >= 12 {
+				// Column mapping varies slightly by top version but usually:
+				// PID(0), USER(1), ..., %CPU(8), %MEM(9), ..., COMMAND(11)
+				cpu, _ := strconv.ParseFloat(fields[8], 64)
+				mem, _ := strconv.ParseFloat(fields[9], 64)
+				
+				processes = append(processes, models.Process{
+					PID:     fields[0],
+					User:    fields[1],
+					CPU:     cpu,
+					Memory:  mem,
+					Command: strings.Join(fields[11:], " "),
+				})
 			}
 		}
 	}
-	return models.LoadAvg{}, nil
+	return load, processes, nil
 }
 
 // ParseSysctl parses the sysctl.txt file
@@ -834,4 +902,81 @@ func ParseInterrupts(bundlePath string) (models.Interrupts, error) {
 		interrupts.Entries = append(interrupts.Entries, entry)
 	}
 	return interrupts, nil
+}
+
+// ParseSoftIRQs parses /proc/softirqs
+func ParseSoftIRQs(bundlePath string) (models.Interrupts, error) {
+	filePath := filepath.Join(bundlePath, "proc", "softirqs")
+	file, err := os.Open(filePath)
+	if err != nil {
+		return models.Interrupts{}, err
+	}
+	defer func() { _ = file.Close() }()
+
+	var interrupts models.Interrupts
+	scanner := bufio.NewScanner(file)
+
+	// First line is header:           CPU0       CPU1 ...
+	if scanner.Scan() {
+		header := scanner.Text()
+		interrupts.CPUs = strings.Fields(header)
+	}
+
+	numCPUs := len(interrupts.CPUs)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Fields(line)
+		if len(parts) < numCPUs+1 {
+			continue
+		}
+
+		entry := models.IRQEntry{
+			IRQID: strings.TrimSuffix(parts[0], ":"),
+		}
+
+		for i := 0; i < numCPUs; i++ {
+			val, _ := strconv.ParseInt(parts[i+1], 10, 64)
+			entry.CPUCounts = append(entry.CPUCounts, val)
+		}
+		
+		interrupts.Entries = append(interrupts.Entries, entry)
+	}
+	return interrupts, nil
+}
+
+// ParseSelfTestResults finds and parses self_test_status_*.json files in the admin directory.
+func ParseSelfTestResults(bundlePath string) ([]models.SelfTestNodeResult, error) {
+	pattern := filepath.Join(bundlePath, "admin", "self_test_status_*.json")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to glob self-test files: %w", err)
+	}
+
+	var allResults []models.SelfTestNodeResult
+
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+
+		var nodeResults []models.SelfTestNodeResult
+		// It could be a single result or a list of results
+		if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
+			if err := json.Unmarshal(data, &nodeResults); err != nil {
+				continue
+			}
+		} else {
+			var singleResult models.SelfTestNodeResult
+			if err := json.Unmarshal(data, &singleResult); err != nil {
+				continue
+			}
+			nodeResults = append(nodeResults, singleResult)
+		}
+		
+		allResults = append(allResults, nodeResults...)
+	}
+
+	return allResults, nil
 }

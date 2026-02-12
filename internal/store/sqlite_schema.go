@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS logs (
     shard TEXT NOT NULL,
     component TEXT NOT NULL,
     message TEXT NOT NULL,
+    message_lower TEXT AS (LOWER(message)) STORED,
     raw TEXT NOT NULL,
     line_number INTEGER NOT NULL,
     file_path TEXT NOT NULL,
@@ -22,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_fingerprint ON logs(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp_level ON logs(timestamp, level);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
-    message,
+    message_lower,
     content='logs',
     content_rowid='id',
     tokenize='trigram'
@@ -30,14 +31,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
 
 -- Triggers to keep FTS index in sync
 CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
-  INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+  INSERT INTO logs_fts(rowid, message_lower) VALUES (new.id, new.message_lower);
 END;
 CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN
-  INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
+  INSERT INTO logs_fts(logs_fts, rowid, message_lower) VALUES('delete', old.id, old.message_lower);
 END;
 CREATE TRIGGER IF NOT EXISTS logs_au AFTER UPDATE ON logs BEGIN
-  INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
-  INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+  INSERT INTO logs_fts(logs_fts, rowid, message_lower) VALUES('delete', old.id, old.message_lower);
+  INSERT INTO logs_fts(rowid, message_lower) VALUES (new.id, new.message_lower);
 END;
 
 -- This table is required by fts5 and stores configuration data
@@ -99,4 +100,13 @@ CREATE TABLE IF NOT EXISTS cpu_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_cpu_profiles_node_shard ON cpu_profiles(node, shard_id);
 CREATE INDEX IF NOT EXISTS idx_cpu_profiles_group ON cpu_profiles(scheduling_group);
+`
+
+const PinsSchema = `
+CREATE TABLE IF NOT EXISTS pins (
+    log_id INTEGER PRIMARY KEY,
+    note TEXT DEFAULT '',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(log_id) REFERENCES logs(id) ON DELETE CASCADE
+);
 `

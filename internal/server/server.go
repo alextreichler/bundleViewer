@@ -49,6 +49,17 @@ type BundleSession struct {
 	LogsOnly     bool
 }
 
+type BasePageData struct {
+	Active          string
+	Sessions        map[string]*BundleSession
+	ActivePath      string
+	LogsOnly        bool
+	CurrentVersion  string
+	LatestVersion   string
+	UpdateAvailable bool
+	UpdateCommand   string
+}
+
 type Server struct {
 	sessions            map[string]*BundleSession
 	activePath          string
@@ -79,18 +90,35 @@ type Server struct {
 	segmentsTemplate    *template.Template
 	segmentViewTemplate *template.Template
 	cpuProfilesTemplate *template.Template
+	notebookTemplate    *template.Template
 	logsOnly            bool
+	currentVersion      string
+	latestVersion       string
+	updateAvailable     bool
 }
 
 func (s *Server) SetDataDir(path string) {
 	s.dataDir = path
 }
 
+func (s *Server) newBasePageData(active string) BasePageData {
+	return BasePageData{
+		Active:          active,
+		Sessions:        s.sessions,
+		ActivePath:      s.activePath,
+		LogsOnly:        s.logsOnly,
+		CurrentVersion:  s.currentVersion,
+		LatestVersion:   s.latestVersion,
+		UpdateAvailable: s.updateAvailable,
+		UpdateCommand:   "curl -sSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/install.sh | bash",
+	}
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker) (http.Handler, error) { // Accept both
+func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker, currentVersion, latestVersion string) (http.Handler, error) { // Accept both
 	funcMap := template.FuncMap{
 		"renderData": func(key string, data interface{}) template.HTML {
 			return renderDataLazy(key, "", data, 0, 0)
@@ -290,6 +318,11 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		return nil, fmt.Errorf("failed to parse cpu_profiles template: %w", err)
 	}
 
+	notebookTemplate, err := template.New("notebook.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/notebook.tmpl", "html/nav.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse notebook template: %w", err)
+	}
+
 	server := &Server{
 		sessions:            make(map[string]*BundleSession),
 		activePath:          bundlePath,
@@ -318,7 +351,11 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		segmentsTemplate:    segmentsTemplate,
 		segmentViewTemplate: segmentViewTemplate,
 		cpuProfilesTemplate: cpuProfilesTemplate,
+		notebookTemplate:    notebookTemplate,
 		logsOnly:            logsOnly,
+		currentVersion:      currentVersion,
+		latestVersion:       latestVersion,
+		updateAvailable:     latestVersion != "" && latestVersion != currentVersion,
 	}
 
 	if server.progress == nil {
@@ -359,7 +396,12 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/logs", server.apiLogsHandler)
 	mux.HandleFunc("/api/logs/analysis", server.apiLogAnalysisDataHandler)
 	mux.HandleFunc("/api/logs/context", server.apiLogContextHandler)
+	mux.HandleFunc("/api/logs/pin", server.apiPinLogHandler)
+	mux.HandleFunc("/api/logs/unpin", server.apiUnpinLogHandler)
 	mux.HandleFunc("/api/full-logs-page", server.apiFullLogsPageHandler) // New handler for lazy loading logs page
+	mux.HandleFunc("/notebook", server.notebookHandler)
+	mux.HandleFunc("/api/notebook/note", server.apiUpdatePinNoteHandler)
+	mux.HandleFunc("/api/notebook/export", server.apiNotebookExportHandler)
 	mux.HandleFunc("/api/metrics/list", server.handleMetricsList)
 	mux.HandleFunc("/api/metrics/data", server.handleMetricsData)
 	mux.HandleFunc("/api/full-metrics", server.apiFullMetricsHandler) // New handler for lazy loading metrics page

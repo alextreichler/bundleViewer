@@ -18,6 +18,7 @@ type RackData struct {
 }
 
 type HomePageData struct {
+	BasePageData
 	GroupedFiles              map[string][]parser.ParsedFile
 	NodeHostname              string
 	TotalBrokers              int
@@ -31,9 +32,6 @@ type HomePageData struct {
 	RackAwarenessEnabled      bool
 	RackInfo                  map[string]RackData
 	StartupTime               time.Time
-	Sessions                  map[string]*BundleSession
-	ActivePath                string
-	LogsOnly                  bool
 }
 
 func (s *Server) setupHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,8 +39,12 @@ func (s *Server) setupHandler(w http.ResponseWriter, r *http.Request) {
 	buf.Reset()
 	defer builderPool.Put(buf)
 
-	data := map[string]interface{}{
-		"CanCancel": s.bundlePath != "",
+	data := struct {
+		BasePageData
+		CanCancel bool
+	}{
+		BasePageData: s.newBasePageData("Setup"),
+		CanCancel:    s.bundlePath != "",
 	}
 
 	if err := s.setupTemplate.Execute(buf, data); err != nil {
@@ -81,8 +83,7 @@ func (s *Server) homeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := s.buildHomePageData()
-	pageData.Sessions = s.sessions
-	pageData.ActivePath = s.activePath
+	pageData.BasePageData = s.newBasePageData("Home")
 
 	buf := builderPool.Get().(*strings.Builder)
 	buf.Reset()
@@ -110,6 +111,7 @@ func (s *Server) partitionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := s.buildPartitionsPageData()
+	pageData.BasePageData = s.newBasePageData("Partitions")
 
 	buf := builderPool.Get().(*strings.Builder)
 	buf.Reset()
@@ -158,23 +160,19 @@ func (s *Server) kafkaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type KafkaPageData struct {
+		BasePageData
 		Metadata       models.KafkaMetadataResponse
 		RawJSON        string
 		TopicConfigs   map[string]models.TopicConfig
 		ConsumerGroups map[string]models.ConsumerGroup
-		Sessions       map[string]*BundleSession
-		ActivePath     string
-		LogsOnly       bool
 	}
 
 	pageData := KafkaPageData{
+		BasePageData:   s.newBasePageData("Kafka"),
 		Metadata:       kafkaMetadata,
 		RawJSON:        rawJSON,
 		TopicConfigs:   topicConfigsMap,
 		ConsumerGroups: s.cachedData.ConsumerGroups,
-		Sessions:       s.sessions,
-		ActivePath:     s.activePath,
-		LogsOnly:       s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)
@@ -203,17 +201,13 @@ func (s *Server) groupsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type GroupsPageData struct {
+		BasePageData
 		ConsumerGroups map[string]models.ConsumerGroup
-		Sessions       map[string]*BundleSession
-		ActivePath     string
-		LogsOnly       bool
 	}
 
 	pageData := GroupsPageData{
+		BasePageData:   s.newBasePageData("Groups"),
 		ConsumerGroups: s.cachedData.ConsumerGroups,
-		Sessions:       s.sessions,
-		ActivePath:     s.activePath,
-		LogsOnly:       s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)
@@ -240,19 +234,15 @@ func (s *Server) k8sHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type K8sPageData struct {
+		BasePageData
 		NodeHostname string
 		Store        models.K8sStore
-		Sessions     map[string]*BundleSession
-		ActivePath   string
-		LogsOnly     bool
 	}
 
 	pageData := K8sPageData{
+		BasePageData: s.newBasePageData("K8s"),
 		NodeHostname: s.nodeHostname,
 		Store:        s.cachedData.K8sStore,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)
@@ -282,19 +272,17 @@ func (s *Server) systemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type SystemPageData struct {
-		NodeHostname string
-		System       models.SystemState
-		Sessions     map[string]*BundleSession
-		ActivePath   string
-		LogsOnly     bool
+		BasePageData
+		NodeHostname    string
+		System          models.SystemState
+		SelfTestResults []models.SelfTestNodeResult
 	}
 
 	pageData := SystemPageData{
-		NodeHostname: s.nodeHostname,
-		System:       s.cachedData.System,
-		Sessions:     s.sessions,
-		ActivePath:   s.activePath,
-		LogsOnly:     s.logsOnly,
+		BasePageData:    s.newBasePageData("System"),
+		NodeHostname:    s.nodeHostname,
+		System:          s.cachedData.System,
+		SelfTestResults: s.cachedData.SelfTestResults,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)
@@ -324,14 +312,12 @@ type TopicPartitions struct {
 }
 
 type PartitionsPageData struct {
+	BasePageData
 	TotalPartitions   int
 	PartitionsPerNode map[int]int
 	LeadersPerNode    map[int]int
 	Topics            map[string]*TopicPartitions
 	NodeHostname      string
-	Sessions          map[string]*BundleSession
-	ActivePath        string
-	LogsOnly          bool
 }
 
 func (s *Server) buildHomePageData() HomePageData {
@@ -442,9 +428,6 @@ func (s *Server) buildHomePageData() HomePageData {
 		RackAwarenessEnabled:      rackAwarenessEnabled,
 		RackInfo:                  rackInfo,
 		StartupTime:               time.Now(),
-		Sessions:                  s.sessions,
-		ActivePath:                s.activePath,
-		LogsOnly:                  s.logsOnly,
 	}
 }
 
@@ -495,8 +478,5 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 		LeadersPerNode:    leadersPerNode,
 		Topics:            topics,
 		NodeHostname:      s.nodeHostname,
-		Sessions:          s.sessions,
-		ActivePath:        s.activePath,
-		LogsOnly:          s.logsOnly,
 	}
 }

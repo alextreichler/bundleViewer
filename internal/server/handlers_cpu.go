@@ -18,12 +18,9 @@ func (s *Server) cpuProfilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := map[string]interface{}{
-		"ActivePath": s.activePath,
-		"LogsOnly":   s.logsOnly,
-	}
+	pageData := s.newBasePageData("CPU Profiles")
 
-	if err := s.cpuProfilesTemplate.Execute(w, data); err != nil {
+	if err := s.cpuProfilesTemplate.Execute(w, pageData); err != nil {
 		s.logger.Error("Failed to execute cpu profiles template", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}

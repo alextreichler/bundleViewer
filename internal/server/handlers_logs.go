@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alextreichler/bundleViewer/internal/models"
 )
@@ -50,6 +51,9 @@ func (s *Server) logsHandler(w http.ResponseWriter, r *http.Request) {
                 </div>
             </div>
         </nav>
+        <div class="version-info" style="position: absolute; top: 10px; right: 10px; font-size: 0.7rem; color: var(--text-color-muted);">
+            v%s
+        </div>
         <div class="container" style="height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
             <div class="card" style="text-align: center; max-width: 400px; width: 100%%;">
                 <h2 style="margin-bottom: 1rem;">Loading Logs...</h2>
@@ -62,7 +66,7 @@ func (s *Server) logsHandler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 </body>
-</html>`, targetURL)
+</html>`, targetURL, s.currentVersion)
 }
 
 func (s *Server) apiFullLogsPageHandler(w http.ResponseWriter, r *http.Request) {
@@ -127,25 +131,21 @@ func (s *Server) apiFullLogsPageHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	type LogsPageData struct {
+		BasePageData
 		Filter     models.LogFilter
 		Nodes      []string
 		Components []string
 		MinTime    string
 		MaxTime    string
-		LogsOnly   bool
-		Sessions   map[string]*BundleSession
-		ActivePath string
 	}
 
 	data := LogsPageData{
-		Filter:     filter,
-		Nodes:      nodes,
-		Components: components,
-		MinTime:    minTimeStr,
-		MaxTime:    maxTimeStr,
-		LogsOnly:   s.logsOnly,
-		Sessions:   s.sessions,
-		ActivePath: s.activePath,
+		BasePageData: s.newBasePageData("Logs"),
+		Filter:       filter,
+		Nodes:        nodes,
+		Components:   components,
+		MinTime:      minTimeStr,
+		MaxTime:      maxTimeStr,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)
@@ -242,12 +242,17 @@ func (s *Server) logAnalysisHandler(w http.ResponseWriter, r *http.Request) {
 	defer builderPool.Put(buf)
 
 	// Render the full page with "Loading..." state
-	err := s.logAnalysisTemplate.Execute(buf, map[string]interface{}{
-		"Partial":    false,
-		"LogsOnly":   s.logsOnly,
-		"Sessions":   s.sessions,
-		"ActivePath": s.activePath,
-	})
+	data := s.newBasePageData("Logs")
+	// Add specific fields
+	pageData := struct {
+		BasePageData
+		Partial bool
+	}{
+		BasePageData: data,
+		Partial:      false,
+	}
+
+	err := s.logAnalysisTemplate.Execute(buf, pageData)
 	if err != nil {
 		s.logger.Error("Error executing log analysis template", "error", err)
 		http.Error(w, "Failed to execute log analysis template", http.StatusInternalServerError)
@@ -388,5 +393,152 @@ func (s *Server) apiLogContextHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(contextLines); err != nil {
 		s.logger.Error("Failed to encode log context", "error", err)
+	}
+}
+
+func (s *Server) apiPinLogHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid log ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.PinLog(id); err != nil {
+		s.logger.Error("Failed to pin log", "id", id, "error", err)
+		http.Error(w, "Failed to pin log", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) apiUnpinLogHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid log ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UnpinLog(id); err != nil {
+		s.logger.Error("Failed to unpin log", "id", id, "error", err)
+		http.Error(w, "Failed to unpin log", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) notebookHandler(w http.ResponseWriter, r *http.Request) {
+	if s.cachedData == nil {
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		return
+	}
+
+	pins, err := s.store.GetPinnedLogs()
+	if err != nil {
+		s.logger.Error("Failed to get pinned logs", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	type NotebookPageData struct {
+		BasePageData
+		Pins []*models.PinnedLog
+	}
+
+	data := NotebookPageData{
+		BasePageData: s.newBasePageData("Notebook"),
+		Pins:         pins,
+	}
+
+	buf := builderPool.Get().(*strings.Builder)
+	buf.Reset()
+	defer builderPool.Put(buf)
+
+	err = s.notebookTemplate.Execute(buf, data)
+	if err != nil {
+		s.logger.Error("Error executing notebook template", "error", err)
+		http.Error(w, "Failed to execute notebook template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := io.WriteString(w, buf.String()); err != nil {
+		s.logger.Error("Failed to write notebook response", "error", err)
+	}
+}
+
+func (s *Server) apiUpdatePinNoteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		return
+	}
+
+	idStr := r.FormValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid log ID", http.StatusBadRequest)
+		return
+	}
+
+	note := r.FormValue("note")
+	if err := s.store.UpdatePinNote(id, note); err != nil {
+		s.logger.Error("Failed to update pin note", "id", id, "error", err)
+		http.Error(w, "Failed to update note", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) apiNotebookExportHandler(w http.ResponseWriter, r *http.Request) {
+	pins, err := s.store.GetPinnedLogs()
+	if err != nil {
+		s.logger.Error("Failed to get pinned logs for export", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Redpanda Debug Notebook\n\n")
+	sb.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format(time.RFC1123)))
+	sb.WriteString(fmt.Sprintf("Bundle: %s\n\n", s.bundlePath))
+
+	for i, pin := range pins {
+		sb.WriteString(fmt.Sprintf("## %d. %s [%s]\n", i+1, pin.Timestamp.Format("2006-01-02 15:04:05.000"), pin.Level))
+		sb.WriteString(fmt.Sprintf("**Node:** %s | **Component:** %s | **File:** %s:%d\n\n", pin.Node, pin.Component, filepath.Base(pin.FilePath), pin.LineNumber))
+		sb.WriteString("### Log Message\n")
+		sb.WriteString("```\n")
+		sb.WriteString(pin.Message)
+		sb.WriteString("\n```\n\n")
+		if pin.Note != "" {
+			sb.WriteString("### Engineer Notes\n")
+			sb.WriteString(pin.Note)
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("---\n\n")
+	}
+
+	w.Header().Set("Content-Type", "text/markdown")
+	w.Header().Set("Content-Disposition", "attachment; filename=redpanda_debug_notebook.md")
+	if _, err := io.WriteString(w, sb.String()); err != nil {
+		s.logger.Error("Failed to write notebook export", "error", err)
 	}
 }
