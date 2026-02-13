@@ -139,6 +139,30 @@
                     </div>
                 </div>
             </div>
+
+            <div style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                <div class="metric-label" style="margin-bottom: 0.5rem;">Raft Recovery</div>
+                <div class="grid-3">
+                    <div>
+                        <div style="font-size: 0.7rem; color: var(--text-color-muted); text-transform: uppercase;">Pending Offsets</div>
+                        <div style="font-size: 1.25rem; font-weight: 600; {{if gt .RaftRecovery.OffsetsPending 0.0}}color: #f59e0b;{{end}}">
+                            {{if gt .RaftRecovery.OffsetsPending 1000000.0}}
+                                {{printf "%.1fM" (div .RaftRecovery.OffsetsPending 1000000.0)}}
+                            {{else}}
+                                {{printf "%.0f" .RaftRecovery.OffsetsPending}}
+                            {{end}}
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.7rem; color: var(--text-color-muted); text-transform: uppercase;">Active Partitions</div>
+                        <div style="font-size: 1.25rem; font-weight: 600;">{{printf "%.0f" .RaftRecovery.PartitionsActive}}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.7rem; color: var(--text-color-muted); text-transform: uppercase;">To Recover</div>
+                        <div style="font-size: 1.25rem; font-weight: 600;">{{printf "%.0f" .RaftRecovery.PartitionsToRecover}}</div>
+                    </div>
+                </div>
+            </div>
             
             {{if .Network.KafkaLatencies}}
             <div style="margin-top: 1.5rem;">

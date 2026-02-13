@@ -2,9 +2,11 @@ package parser
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/store"
@@ -53,21 +56,80 @@ func parseSizeToBytes(sizeStr string) (int64, error) {
 	return int64(parsedValue * float64(multiplier)), nil
 }
 
+// utf16leReader wraps an io.Reader and decodes UTF-16LE to UTF-8.
+type utf16leReader struct {
+	r        io.Reader
+	leftover []byte
+	buf      []byte
+}
+
+func newUTF16LEReader(r io.Reader) io.Reader {
+	return &utf16leReader{
+		r:   r,
+		buf: make([]byte, 8192),
+	}
+}
+
+func (u *utf16leReader) Read(p []byte) (int, error) {
+	if len(u.leftover) > 0 {
+		n := copy(p, u.leftover)
+		u.leftover = u.leftover[n:]
+		return n, nil
+	}
+
+	n, err := u.r.Read(u.buf)
+	if n == 0 {
+		return 0, err
+	}
+
+	// We need an even number of bytes for UTF-16
+	total := n
+	if total%2 != 0 {
+		// Read one more byte if possible
+		one := make([]byte, 1)
+		n1, _ := u.r.Read(one)
+		if n1 == 1 {
+			u.buf[n] = one[0]
+			total++
+		} else {
+			// Cannot read more, just process what we have (last byte will be lost or handled)
+			total--
+		}
+	}
+
+	utf16Data := make([]uint16, total/2)
+	for i := 0; i < len(utf16Data); i++ {
+		utf16Data[i] = binary.LittleEndian.Uint16(u.buf[i*2 : i*2+2])
+	}
+
+	decoded := string(utf16.Decode(utf16Data))
+	decodedBytes := []byte(decoded)
+
+	nCopied := copy(p, decodedBytes)
+	if nCopied < len(decodedBytes) {
+		u.leftover = decodedBytes[nCopied:]
+	}
+
+	return nCopied, err
+}
+
 // tryParseStandardLog attempts to parse a log line using fast string operations.
 // Format: LEVEL  YYYY-MM-DD HH:MM:SS,mmm [shard X] component - message
 func tryParseStandardLog(line string) (level, ts, shard, comp, msg string, ok bool) {
-	if len(line) < 30 {
+	// 0. Robustness: trim leading BOM or spaces
+	line = strings.TrimLeft(line, "\ufeff ")
+	if len(line) < 25 {
 		return "", "", "", "", "", false
 	}
 
 	// 1. Level (INFO, WARN, ERROR, DEBUG, TRACE)
 	idx := strings.IndexByte(line, ' ')
-	if idx < 4 || idx > 5 {
+	if idx == -1 {
 		return "", "", "", "", "", false
 	}
 	level = line[:idx]
 	switch level {
-	case "INFO", "WARN", "ERROR", "DEBUG", "TRACE":
+	case "INFO", "WARN", "ERROR", "DEBUG", "TRACE", "FATAL":
 		// Valid level
 	default:
 		return "", "", "", "", "", false
@@ -81,18 +143,44 @@ func tryParseStandardLog(line string) (level, ts, shard, comp, msg string, ok bo
 		tsIdx++
 	}
 	rest = rest[tsIdx:]
-	if len(rest) < 23 || rest[4] != '-' || rest[7] != '-' {
+
+	// Flexible timestamp: expect at least YYYY-MM-DD
+	if len(rest) < 10 || rest[4] != '-' || rest[7] != '-' {
 		return "", "", "", "", "", false
 	}
-	ts = rest[:23]
-	rest = rest[23:]
+
+	// Find end of timestamp. It's usually ~23 chars (YYYY-MM-DD HH:MM:SS,mmm)
+	// We'll look for the next '[' or ' - ' or a space that isn't the one between date and time.
+	endTs := 10 // Past the date
+	if endTs < len(rest) && (rest[endTs] == ' ' || rest[endTs] == 'T') {
+		endTs++ // Skip space between date and time
+		// Now find the next space, bracket or hyphen
+		for endTs < len(rest) {
+			if rest[endTs] == ' ' || rest[endTs] == '[' {
+				break
+			}
+			if strings.HasPrefix(rest[endTs:], " - ") {
+				break
+			}
+			endTs++
+		}
+	}
+	ts = strings.TrimSpace(rest[:endTs])
+	rest = rest[endTs:]
 
 	// 3. Shard (optional)
 	rest = strings.TrimLeft(rest, " ")
 	if strings.HasPrefix(rest, "[shard") {
 		endIdx := strings.IndexByte(rest, ']')
 		if endIdx != -1 {
-			shard = strings.TrimSpace(rest[6:endIdx])
+			shardRaw := rest[6:endIdx]
+			// Handle "[shard 1:main]" -> extract "1"
+			shardParts := strings.FieldsFunc(strings.TrimSpace(shardRaw), func(r rune) bool {
+				return r == ':' || r == ' '
+			})
+			if len(shardParts) > 0 {
+				shard = shardParts[0]
+			}
 			rest = rest[endIdx+1:]
 		}
 	}
@@ -390,10 +478,23 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 			}
 			defer func() { _ = f.Close() }()
 
+			// Detect UTF-16LE
+			var r io.Reader = f
+			bom := make([]byte, 2)
+			if n, err := f.Read(bom); err == nil && n == 2 {
+				if bom[0] == 0xff && bom[1] == 0xfe {
+					r = newUTF16LEReader(f)
+				} else {
+					f.Seek(0, io.SeekStart)
+				}
+			} else {
+				f.Seek(0, io.SeekStart)
+			}
+
 			// Pre-allocate batch slice to reduce re-allocations
 			batch := make([]*models.LogEntry, 0, batchSize)
 			
-			scanner := bufio.NewScanner(f)
+			scanner := bufio.NewScanner(r)
 			const maxCapacity = 5 * 1024 * 1024 // 5MB
 			buf := make([]byte, maxCapacity)
 			scanner.Buffer(buf, maxCapacity)
@@ -465,6 +566,14 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 
 						// Normalize timestamp
 						fTs = strings.Replace(fTs, ".", ",", 1)
+						if len(fTs) > 23 {
+							fTs = fTs[:23]
+						} else if len(fTs) == 19 {
+							fTs += ",000"
+						} else if len(fTs) < 23 && len(fTs) > 19 {
+							// Pad milliseconds if they are less than 3 digits
+							fTs += strings.Repeat("0", 23-len(fTs))
+						}
 						timestamp, _ := time.Parse(layout, fTs)
 
 						// Clean up shard info
@@ -921,6 +1030,43 @@ func ParseClusterPartitions(bundlePath string) ([]models.ClusterPartition, error
 	}
 
 	return partitions, nil
+}
+
+// ParsePartitionDebug reads and parses all debug_partition_*.json files.
+func ParsePartitionDebug(bundlePath string) ([]models.PartitionDebug, error) {
+	pattern := filepath.Join(bundlePath, "admin", "debug_partition_*.json")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []models.PartitionDebug
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+
+		var pd models.PartitionDebug
+		if err := json.Unmarshal(data, &pd); err == nil {
+			// Extract NS/Topic/ID from filename if not in JSON (sometimes it's missing in root)
+			// Filename format: debug_partition_{ns}_{topic}_{id}.json
+			if pd.Topic == "" {
+				base := filepath.Base(file)
+				base = strings.TrimPrefix(base, "debug_partition_")
+				base = strings.TrimSuffix(base, ".json")
+				parts := strings.Split(base, "_")
+				if len(parts) >= 3 {
+					pd.Ns = parts[0]
+					pd.Topic = parts[1]
+					pd.ID, _ = strconv.Atoi(parts[2])
+				}
+			}
+			results = append(results, pd)
+		}
+	}
+
+	return results, nil
 }
 
 // ParsedFile holds the filename and the parsed data of a file.

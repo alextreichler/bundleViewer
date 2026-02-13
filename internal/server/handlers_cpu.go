@@ -3,10 +3,12 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/alextreichler/bundleViewer/internal/downloader"
 	"github.com/alextreichler/bundleViewer/internal/models"
@@ -20,9 +22,19 @@ func (s *Server) cpuProfilesHandler(w http.ResponseWriter, r *http.Request) {
 
 	pageData := s.newBasePageData("CPU Profiles")
 
-	if err := s.cpuProfilesTemplate.Execute(w, pageData); err != nil {
+	buf := builderPool.Get().(*strings.Builder)
+	buf.Reset()
+	defer builderPool.Put(buf)
+
+	if err := s.cpuProfilesTemplate.Execute(buf, pageData); err != nil {
 		s.logger.Error("Failed to execute cpu profiles template", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := io.WriteString(w, buf.String()); err != nil {
+		s.logger.Error("Failed to write cpu profiles response", "error", err)
 	}
 }
 

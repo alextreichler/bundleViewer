@@ -22,6 +22,7 @@ type CachedData struct {
 	DataDiskFiles     []string
 	CacheDiskFiles    []string
 	Partitions        []models.ClusterPartition
+	PartitionDebug    []models.PartitionDebug
 	Leaders           []models.PartitionLeader
 	KafkaMetadata     models.KafkaMetadataResponse
 	TopicConfigs      models.TopicConfigsResponse
@@ -71,6 +72,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 	var clusterConfigData []models.ClusterConfigEntry
 	var clusterConfigError error
 	var partitions []models.ClusterPartition
+	var partitionDebug []models.PartitionDebug
 	var leaders []models.PartitionLeader
 	var kafkaMetadataData models.KafkaMetadataResponse
 	var topicConfigsData models.TopicConfigsResponse
@@ -331,6 +333,17 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 					slog.Warn("Failed to parse cluster partitions", "error", err)
 				}
 				p.Update(1, "Partition metadata parsed")
+			},
+		},
+		{
+			name: "Partition debug",
+			fn: func() {
+				var err error
+				partitionDebug, err = parser.ParsePartitionDebug(bundlePath)
+				if err != nil {
+					slog.Warn("Failed to parse partition debug", "error", err)
+				}
+				p.Update(1, "Partition debug parsed")
 			},
 		},
 		{
@@ -609,7 +622,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 
 	return &CachedData{
 		GroupedFiles: groupedFiles, DataDiskFiles: dataDiskFiles, CacheDiskFiles: cacheDiskFiles,
-		Partitions: partitions, Leaders: leaders, KafkaMetadata: kafkaMetadataData,
+		Partitions: partitions, PartitionDebug: partitionDebug, Leaders: leaders, KafkaMetadata: kafkaMetadataData,
 		TopicConfigs: topicConfigsData, ConsumerGroups: consumerGroupsData, HealthOverview: healthOverviewData, ResourceUsage: resourceUsageData,
 		DataDiskStats: dataDiskStatsData, CacheDiskStats: cacheDiskStatsData, DuEntries: duEntriesData,
 		K8sStore: k8sStoreData, RedpandaDataDir: redpandaDataDir, RedpandaConfig: redpandaConfig, PartitionBalancer: partitionBalancerData,

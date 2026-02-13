@@ -802,3 +802,71 @@ th.sortable-header.sorted-asc::after {
     text-shadow: 0 0 2px rgba(0,0,0,0.2);
 }
 
+/* Partition Insight Styles */
+.insight-box {
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin: 5px 0;
+    border-left: 4px solid transparent;
+}
+
+.insight-warn {
+    background-color: #fffbeb;
+    border-color: #f59e0b;
+    color: #92400e;
+}
+
+.insight-error {
+    background-color: #fef2f2;
+    border-color: #ef4444;
+    color: #991b1b;
+}
+
+[data-theme="dark"] .insight-warn, [data-theme="ultra-dark"] .insight-warn {
+    background-color: #451a03;
+    color: #fcd34d;
+}
+
+[data-theme="dark"] .insight-error, [data-theme="ultra-dark"] .insight-error {
+    background-color: #450a0a;
+    color: #fca5a5;
+}
+
+.remediation-cmd {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.05);
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.remediation-cmd code {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    flex-grow: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.copy-btn {
+    padding: 2px 6px;
+    font-size: 0.8rem;
+    background: var(--card-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+}
+
+.copy-btn:hover {
+    background: var(--bg-color);
+}
+
+.text-warning {
+    color: #f59e0b;
+    font-weight: 600;
+}
+
+

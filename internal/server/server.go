@@ -1,12 +1,15 @@
 package server
 
 import (
+	"compress/gzip"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alextreichler/bundleViewer/internal/cache"
 	"github.com/alextreichler/bundleViewer/internal/models"
@@ -34,6 +37,36 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
+
+func (w gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
+func GzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+
+		gzw := gzipResponseWriter{Writer: gz, ResponseWriter: w}
+		
+		// If the handler sets Content-Encoding later, we might have an issue.
+		// But for our simple app, this should be fine.
+		// A more robust version would check the content type before starting gzip.
+		w.Header().Set("Content-Encoding", "gzip")
+		
+		next.ServeHTTP(gzw, r)
+	})
+}
+
 const (
 	maxInitialRenderDepth = 2   // Only render 2 levels deep initially
 	maxInitialRenderItems = 25  // Reduced from 50
@@ -58,6 +91,13 @@ type BasePageData struct {
 	LatestVersion   string
 	UpdateAvailable bool
 	UpdateCommand   string
+	RaftRecovery    RaftRecoveryMetrics
+}
+
+type RaftRecoveryMetrics struct {
+	OffsetsPending      float64
+	PartitionsActive    float64
+	PartitionsToRecover float64
 }
 
 type Server struct {
@@ -102,6 +142,23 @@ func (s *Server) SetDataDir(path string) {
 }
 
 func (s *Server) newBasePageData(active string) BasePageData {
+	var raftRecovery RaftRecoveryMetrics
+	if s.store != nil {
+		startTime, endTime := time.Time{}, time.Time{}
+		offsets, _ := s.store.GetMetrics("vectorized_raft_recovery_offsets_pending", nil, startTime, endTime, 0, 0)
+		for _, m := range offsets {
+			raftRecovery.OffsetsPending += m.Value
+		}
+		activeParts, _ := s.store.GetMetrics("vectorized_raft_recovery_partitions_active", nil, startTime, endTime, 0, 0)
+		for _, m := range activeParts {
+			raftRecovery.PartitionsActive += m.Value
+		}
+		toRecover, _ := s.store.GetMetrics("vectorized_raft_recovery_partitions_to_recover", nil, startTime, endTime, 0, 0)
+		for _, m := range toRecover {
+			raftRecovery.PartitionsToRecover += m.Value
+		}
+	}
+
 	return BasePageData{
 		Active:          active,
 		Sessions:        s.sessions,
@@ -111,6 +168,7 @@ func (s *Server) newBasePageData(active string) BasePageData {
 		LatestVersion:   s.latestVersion,
 		UpdateAvailable: s.updateAvailable,
 		UpdateCommand:   "curl -sSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/install.sh | bash",
+		RaftRecovery:    raftRecovery,
 	}
 }
 
@@ -424,9 +482,10 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/cpu/download", server.apiCpuDownloadHandler)
 
 	// Wrap the mux with middlewares
-	// Order: Security -> Mux
+	// Order: Gzip -> Security -> Mux
 	var handler http.Handler = mux
 	handler = SecurityHeadersMiddleware(handler)
+	handler = GzipMiddleware(handler)
 
 	server.handler = handler
 

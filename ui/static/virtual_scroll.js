@@ -1,12 +1,16 @@
 // ui/static/virtual_scroll.js
-document.addEventListener('DOMContentLoaded', async () => {
+async function initVirtualScroll() {
     const tableContainer = document.getElementById('partition-leaders-container');
     const tbody = document.getElementById('partition-leaders-tbody');
 
     if (!tableContainer || !tbody) {
-        console.warn("Virtual scroll elements not found.");
         return;
     }
+
+    if (tableContainer.dataset.vscrollInitialized === 'true') {
+        return;
+    }
+    tableContainer.dataset.vscrollInitialized = 'true';
 
     // Helper to handle 0 values correctly (so they don't turn into dashes)
     const safeGet = (val, fallback = '-') => (val !== undefined && val !== null) ? val : fallback;
@@ -20,13 +24,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         data = await response.json();
-        
-        // Debug: Check this in console if columns are still empty
-        if(data.length > 0) console.log("First row data:", data[0]);
 
     } catch (error) {
         console.error("Failed to load partition leaders:", error);
         tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: red;">Failed to load partition leaders.</td></tr>';
+        tableContainer.dataset.vscrollInitialized = 'false';
         return;
     }
 
@@ -83,33 +85,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             row.style.height = `${rowHeight}px`;
 
             // Data Mapping with Fallbacks
-            // Tries multiple property names to find the right data
             const cells = [
                 safeGet(leader.ns || leader.namespace),
                 safeGet(leader.topic),
                 safeGet(leader.partition_id || leader.partition),
                 safeGet(leader.leader || leader.leader_id),
-                
-                // Term: Tries 'term' OR 'last_stable_leader_term'
                 safeGet(leader.term ?? leader.last_stable_leader_term),
-                
-                // Rev: Tries 'revision' OR 'rev' OR 'partition_revision'
                 safeGet(leader.revision ?? leader.rev ?? leader.partition_revision),
-                
-                // Prev Leader: Tries 'previous_leader' OR 'previous_leader_id'
                 safeGet(leader.previous_leader ?? leader.previous_leader_id)
             ];
 
             cells.forEach(content => {
                 const cell = document.createElement('td');
                 cell.textContent = content;
-                
-                // Styling to prevent cell blowout
                 cell.style.whiteSpace = 'nowrap';
                 cell.style.overflow = 'hidden';
                 cell.style.textOverflow = 'ellipsis';
-                cell.style.padding = '8px'; // Adjust based on your CSS
-                
+                cell.style.padding = '8px';
                 row.appendChild(cell);
             });
 
@@ -157,4 +149,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             th.classList.remove('sorted-asc', 'sorted-desc');
         });
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        initVirtualScroll();
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initVirtualScroll();
+        });
+    });
+} else {
+    initVirtualScroll();
+    if (!window.htmxVScrollListenerAdded) {
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initVirtualScroll();
+        });
+        window.htmxVScrollListenerAdded = true;
+    }
+}

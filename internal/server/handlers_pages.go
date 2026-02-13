@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alextreichler/bundleViewer/internal/analysis"
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/parser"
 )
@@ -434,6 +435,16 @@ func (s *Server) buildHomePageData() HomePageData {
 func (s *Server) buildPartitionsPageData() PartitionsPageData {
 	partitions := s.cachedData.Partitions
 	leaders := s.cachedData.Leaders
+	debugInfo := s.cachedData.PartitionDebug
+
+	// Map debug info for fast lookup: topic -> partitionID -> debug
+	debugMap := make(map[string]map[int]models.PartitionDebug)
+	for _, d := range debugInfo {
+		if _, ok := debugMap[d.Topic]; !ok {
+			debugMap[d.Topic] = make(map[int]models.PartitionDebug)
+		}
+		debugMap[d.Topic][d.ID] = d
+	}
 
 	leaderMap := make(map[string]int)
 	for _, l := range leaders {
@@ -465,11 +476,17 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 			leadersPerNode[leader]++
 		}
 
-		topics[p.Topic].Partitions = append(topics[p.Topic].Partitions, models.PartitionInfo{
+		info := models.PartitionInfo{
 			ID:       p.PartitionID,
 			Replicas: replicas,
 			Leader:   leader,
-		})
+			Status:   p.Status,
+		}
+
+		// Generate Insights
+		info.Insight = analysis.AnalyzeReplication(p, debugMap)
+
+		topics[p.Topic].Partitions = append(topics[p.Topic].Partitions, info)
 	}
 
 	return PartitionsPageData{

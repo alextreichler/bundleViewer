@@ -23,9 +23,34 @@ async function toggleTopicDetails(topicName) {
         }
         const partitions = await response.json();
 
-        let html = '<table><thead><tr><th>Partition ID</th><th>Leader</th><th>Replicas</th></tr></thead><tbody>';
+        let html = '<table class="partitions-detail-table"><thead><tr><th>Partition ID</th><th>Status</th><th>Leader</th><th>Replicas</th><th>Actionable Insights</th></tr></thead><tbody>';
         for (const partition of partitions) {
-            html += `<tr><td>${partition.id}</td><td>${partition.leader}</td><td>${partition.replicas.join(', ')}</td></tr>`;
+            let statusClass = '';
+            if (partition.status === 'under_replicated') statusClass = 'text-warning';
+            
+            let insightHtml = '-';
+            if (partition.insight) {
+                const severityClass = partition.insight.severity === 'error' ? 'insight-error' : 'insight-warn';
+                insightHtml = `
+                    <div class="insight-box ${severityClass}">
+                        <strong>${partition.insight.summary}</strong>
+                        ${partition.insight.remediation ? `
+                            <div class="remediation-cmd">
+                                <code>${partition.insight.remediation}</code>
+                                <button class="copy-btn" onclick="copyToClipboard('${partition.insight.remediation}')" title="Copy Command">📋</button>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+
+            html += `<tr>
+                <td>${partition.id}</td>
+                <td><span class="${statusClass}">${partition.status || 'healthy'}</span></td>
+                <td>${partition.leader}</td>
+                <td>${partition.replicas.join(', ')}</td>
+                <td>${insightHtml}</td>
+            </tr>`;
         }
         html += '</tbody></table>';
 
@@ -129,9 +154,26 @@ function sortPartitionTable(table, column, header) {
     });
 }
 
-// Initialize after page load
-document.addEventListener('DOMContentLoaded', () => {
+function initPartitionsSortable() {
     makePartitionTableSortable('#partitions-table');
     makePartitionTableSortable('#leaders-table');
     makePartitionTableSortable('#topics-table');
-});
+}
+
+// Initialize after page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        initPartitionsSortable();
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initPartitionsSortable();
+        });
+    });
+} else {
+    initPartitionsSortable();
+    if (!window.htmxPartitionsListenerAdded) {
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initPartitionsSortable();
+        });
+        window.htmxPartitionsListenerAdded = true;
+    }
+}

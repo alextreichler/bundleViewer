@@ -1,9 +1,10 @@
-document.addEventListener("DOMContentLoaded", function() {
+function initProgress() {
     // Progress Bar Logic
     const progressBar = document.getElementById('progress-bar');
     const loadingOverlay = document.getElementById('loading-overlay');
     
-    if (progressBar && loadingOverlay) {
+    if (progressBar && loadingOverlay && !window.progressInitialized) {
+        window.progressInitialized = true;
         const eventSource = new EventSource('/api/load-progress');
 
         eventSource.onmessage = function(event) {
@@ -21,6 +22,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
             if (progress >= 100) {
                 eventSource.close();
+                window.progressInitialized = false;
                 setTimeout(() => {
                     loadingOverlay.style.display = 'none';
                 }, 500);
@@ -30,7 +32,25 @@ document.addEventListener("DOMContentLoaded", function() {
         eventSource.onerror = function(err) {
             console.error("EventSource failed:", err);
             eventSource.close();
+            window.progressInitialized = false;
             loadingOverlay.style.display = 'none';
         };
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener("DOMContentLoaded", function() {
+        initProgress();
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initProgress();
+        });
+    });
+} else {
+    initProgress();
+    if (!window.htmxProgressListenerAdded) {
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initProgress();
+        });
+        window.htmxProgressListenerAdded = true;
+    }
+}

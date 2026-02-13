@@ -48,6 +48,7 @@ type MetricsPageData struct {
 	SarData       models.SarData
 	CoreCount     int
 	Network       NetworkMetrics
+	RaftRecovery  RaftRecoveryMetrics
 	MetricNames   []string // Added for interactive explorer
 }
 
@@ -329,9 +330,11 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 5. Build page data
+	baseData := s.newBasePageData("Metrics")
+
+	// 7. Build page data
 	pageData := MetricsPageData{
-		BasePageData:  s.newBasePageData("Metrics"),
+		BasePageData:  baseData,
 		NodeHostname:  s.nodeHostname,
 		ResourceUsage: resourceUsage,
 		ShardCPU:      shardCPU,
@@ -341,6 +344,7 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		SarData:       s.cachedData.SarData,
 		CoreCount:     s.cachedData.System.CoreCount,
 		Network:       networkMetrics,
+		RaftRecovery:  baseData.RaftRecovery,
 		MetricNames:   metricNames,
 	}
 

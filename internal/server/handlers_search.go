@@ -33,8 +33,20 @@ func (s *Server) searchHandler(w http.ResponseWriter, r *http.Request) {
 			BasePageData: s.newBasePageData("Search"),
 			NodeHostname: s.nodeHostname,
 		}
-		if err := s.searchTemplate.Execute(w, pageData); err != nil {
+
+		buf := builderPool.Get().(*strings.Builder)
+		buf.Reset()
+		defer builderPool.Put(buf)
+
+		if err := s.searchTemplate.Execute(buf, pageData); err != nil {
 			s.logger.Error("Failed to execute search template", "error", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if _, err := io.WriteString(w, buf.String()); err != nil {
+			s.logger.Error("Failed to write search response", "error", err)
 		}
 		return
 	}

@@ -493,7 +493,21 @@ async function togglePin(index) {
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() {
         if (window.initLogsView) window.initLogsView();
+        // Add HTMX listener
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            if (document.querySelector('.log-table')) {
+                if (window.initLogsView) window.initLogsView();
+            }
+        });
     });
 } else if (typeof window.initLogsView === 'function') {
     window.initLogsView();
+    if (!window.htmxLogsListenerAdded) {
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            if (document.querySelector('.log-table')) {
+                if (window.initLogsView) window.initLogsView();
+            }
+        });
+        window.htmxLogsListenerAdded = true;
+    }
 }

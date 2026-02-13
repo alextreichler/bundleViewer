@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alextreichler/bundleViewer/internal/analysis"
 	"github.com/alextreichler/bundleViewer/internal/cache"
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/store"
@@ -268,6 +269,17 @@ func (s *Server) topicDetailsHandler(w http.ResponseWriter, r *http.Request) {
 
 	partitions := s.cachedData.Partitions
 	leaders := s.cachedData.Leaders
+	debugInfo := s.cachedData.PartitionDebug
+
+	// Map debug info for fast lookup: topic -> partitionID -> debug
+	debugMap := make(map[string]map[int]models.PartitionDebug)
+	for _, d := range debugInfo {
+		if _, ok := debugMap[d.Topic]; !ok {
+			debugMap[d.Topic] = make(map[int]models.PartitionDebug)
+		}
+		debugMap[d.Topic][d.ID] = d
+	}
+
 	leaderMap := make(map[string]int, len(leaders))
 	for _, l := range leaders {
 		key := fmt.Sprintf("%s-%d", l.Topic, l.PartitionID)
@@ -282,11 +294,18 @@ func (s *Server) topicDetailsHandler(w http.ResponseWriter, r *http.Request) {
 			for _, r := range p.Replicas {
 				replicas = append(replicas, r.NodeID)
 			}
-			topicPartitions = append(topicPartitions, models.PartitionInfo{
+			
+			info := models.PartitionInfo{
 				ID:       p.PartitionID,
 				Leader:   leaderMap[key],
 				Replicas: replicas,
-			})
+				Status:   p.Status,
+			}
+			
+			// Add insight if under-replicated
+			info.Insight = analysis.AnalyzeReplication(p, debugMap)
+			
+			topicPartitions = append(topicPartitions, info)
 		}
 	}
 

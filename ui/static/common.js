@@ -29,8 +29,17 @@ function toggleVisibility(id, linkElement) {
     }
 }
 
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Optional: show a brief "Copied!" message
+        alert("Command copied to clipboard!");
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+    });
+}
+
 // Deep Linking Logic
-document.addEventListener("DOMContentLoaded", function() {
+function initDeepLinking() {
     const urlParams = new URLSearchParams(window.location.search);
     const fileName = urlParams.get('file');
     const query = urlParams.get('q');
@@ -68,7 +77,26 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         }
     }
-});
+}
+
+// Initial load trigger
+if (document.readyState === 'loading') {
+    document.addEventListener("DOMContentLoaded", function() {
+        initDeepLinking();
+        // Add HTMX listener
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initDeepLinking();
+        });
+    });
+} else {
+    initDeepLinking();
+    if (!window.htmxCommonListenerAdded) {
+        document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+            initDeepLinking();
+        });
+        window.htmxCommonListenerAdded = true;
+    }
+}
 
 function highlightAndScroll(container, text) {
     if (!text) return;
