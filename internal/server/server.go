@@ -184,21 +184,73 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		"lower": func(v interface{}) string {
 			return strings.ToLower(fmt.Sprintf("%v", v))
 		},
-		"float64": func(v int) float64 {
-			return float64(v)
+		"float64": func(v interface{}) float64 {
+			switch i := v.(type) {
+			case int:
+				return float64(i)
+			case int64:
+				return float64(i)
+			case float64:
+				return i
+			default:
+				return 0.0
+			}
 		},
-		"formatBytes": func(b int64) template.HTML {
-			return template.HTML(formatBytes(float64(b)))
+		"toFloat64": func(v interface{}) float64 {
+			switch i := v.(type) {
+			case int:
+				return float64(i)
+			case int64:
+				return float64(i)
+			case float64:
+				return i
+			default:
+				return 0.0
+			}
+		},
+		"formatBytes": func(b interface{}) template.HTML {
+			var val float64
+			switch v := b.(type) {
+			case int:
+				val = float64(v)
+			case int64:
+				val = float64(v)
+			case float64:
+				val = v
+			}
+			return template.HTML(formatBytes(val))
 		},
 		"formatBytesFloat": func(b float64) template.HTML {
 			return template.HTML(formatBytes(b))
 		},
-		"sub": func(a, b int64) int64 {
-			return a - b
+		"sub": func(a, b interface{}) int64 {
+			var va, vb int64
+			switch v := a.(type) {
+			case int: va = int64(v)
+			case int64: va = v
+			case float64: va = int64(v)
+			}
+			switch v := b.(type) {
+			case int: vb = int64(v)
+			case int64: vb = v
+			case float64: vb = int64(v)
+			}
+			return va - vb
 		},
 
-		"mul": func(a, b float64) float64 {
-			return a * b
+		"mul": func(a, b interface{}) float64 {
+			var va, vb float64
+			switch v := a.(type) {
+			case int: va = float64(v)
+			case int64: va = float64(v)
+			case float64: va = v
+			}
+			switch v := b.(type) {
+			case int: vb = float64(v)
+			case int64: vb = float64(v)
+			case float64: vb = v
+			}
+			return va * vb
 		},
 		"contains": func(s, substr string) bool {
 			return strings.Contains(s, substr)
@@ -224,17 +276,48 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		"add": func(a, b int) int {
 			return a + b
 		},
+		"add64": func(a, b interface{}) int64 {
+			var va, vb int64
+			switch v := a.(type) {
+			case int: va = int64(v)
+			case int64: va = v
+			case float64: va = int64(v)
+			}
+			switch v := b.(type) {
+			case int: vb = int64(v)
+			case int64: vb = v
+			case float64: vb = int64(v)
+			}
+			return va + vb
+		},
+		"mod": func(a, b int) int {
+			if b == 0 {
+				return 0
+			}
+			return a % b
+		},
 		"abs": func(a int64) int64 {
 			if a < 0 {
 				return -a
 			}
 			return a
 		},
-		"div": func(a, b float64) float64 {
-			if b == 0 {
+		"div": func(a, b interface{}) float64 {
+			var va, vb float64
+			switch v := a.(type) {
+			case int: va = float64(v)
+			case int64: va = float64(v)
+			case float64: va = v
+			}
+			switch v := b.(type) {
+			case int: vb = float64(v)
+			case int64: vb = float64(v)
+			case float64: vb = v
+			}
+			if vb == 0 {
 				return 0.0 // Avoid division by zero
 			}
-			return a / b
+			return va / vb
 		},
 		"percent": func(a, b int64) float64 {
 			return percent(float64(a), float64(b))
@@ -269,6 +352,9 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 				logger.Warn("toInt64 received unsupported type, returning 0", "type", fmt.Sprintf("%T", v))
 				return 0
 			}
+		},
+		"list": func(values ...interface{}) []interface{} {
+			return values
 		},
 		"dict": func(values ...interface{}) (map[string]interface{}, error) {
 			if len(values)%2 != 0 {

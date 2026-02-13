@@ -7,9 +7,14 @@ import (
 	"github.com/alextreichler/bundleViewer/internal/models"
 )
 
-// GenerateFingerprint creates a generic signature for a log message
-// Optimized single-pass implementation
+// GenerateFingerprint creates a generic signature for a log message.
+// It uses a token-aware approach inspired by the Drain algorithm, splitting by common
+// log delimiters and masking tokens that contain variable data (digits, hex, etc.)
 func GenerateFingerprint(message string) string {
+	if len(message) == 0 {
+		return ""
+	}
+
 	var b strings.Builder
 	b.Grow(len(message))
 
@@ -22,54 +27,80 @@ func GenerateFingerprint(message string) string {
 			quote := c
 			b.WriteString("<STR>")
 			i++
+			// Skip until closing quote or end
 			for i < n && message[i] != quote {
 				i++
 			}
 			continue
 		}
 
-		// 2. Numbers and Hex/UUIDs
-		// If we hit a digit, we check the "word"
-		if isDigit(c) {
-			// Look ahead to see if this is a hex string/UUID or just a number
-			hasLetter := false
-			
-			// Scan until non-alphanumeric
-			for i < n {
-				curr := message[i]
-				if isDigit(curr) {
-					// ok
-				} else if (curr >= 'a' && curr <= 'z') || (curr >= 'A' && curr <= 'Z') || curr == '-' {
-					hasLetter = true
-				} else if curr == '.' {
-					// 123.456 (float) or 192.168.1.1 (IP)
-				} else {
-					// End of word (space, bracket, etc)
-					break
-				}
-				i++
-			}
-			
-			// Back up one since outer loop increments
-			i--
-			
-			if hasLetter {
-				// It was mixed alphanum (UUID, Hex, "2nd", IP?)
-				b.WriteString("<ID>")
-			} else {
-				// Pure digits/dots
-				b.WriteString("<NUM>")
-			}
+		// 2. Delimiters (Space and common Punctuation)
+		if isDelimiter(c) {
+			b.WriteByte(c)
 			continue
 		}
 
-		b.WriteByte(c)
+		// 3. Token/Word
+		start := i
+		for i < n && !isDelimiter(message[i]) {
+			i++
+		}
+		token := message[start:i]
+
+		// Identify if this token is a variable part
+		if marker, isVar := getVariableMarker(token); isVar {
+			b.WriteString(marker)
+		} else {
+			b.WriteString(token)
+		}
+		
+		// Back up one since the outer loop increments
+		i--
 	}
 	return b.String()
 }
 
-func isDigit(c byte) bool {
-	return c >= '0' && c <= '9'
+func isDelimiter(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '[', ']', '{', '}', '(', ')', ',', ':', '=', ';', '<', '>', '/', '\\', '|', '-', '#':
+		return true
+	default:
+		return false
+	}
+}
+
+func getVariableMarker(s string) (string, bool) {
+	if len(s) == 0 {
+		return "", false
+	}
+
+	// Hex check
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		return "<HEX>", true
+	}
+
+	// Pure numeric check (including decimals/negatives if they aren't delimiters)
+	isNumeric := true
+	hasDigit := false
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			hasDigit = true
+		} else if s[i] == '.' {
+			// fine
+		} else {
+			isNumeric = false
+		}
+	}
+
+	if isNumeric && hasDigit {
+		return "<NUM>", true
+	}
+
+	if hasDigit {
+		return "<*>", true
+	}
+
+	return "", false
 }
 
 // AnalyzeLogs groups logs by fingerprint

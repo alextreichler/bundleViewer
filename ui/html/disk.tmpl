@@ -3,6 +3,7 @@
 <head>
 	<title>Disk Overview</title>
 	<link rel="stylesheet" href="/static/style.css">
+	<link rel="stylesheet" href="/static/disk_viz.css">
 	<script src="/static/theme.js"></script>
 </head>
 <body>
@@ -17,6 +18,35 @@
 	</div>
     {{template "nav" .}}
 	<h1>Disk Overview</h1>
+
+    <div class="viz-container">
+        <h2 class="viz-title">📊 Topic Disk Distribution</h2>
+        <p style="margin-bottom: 1rem; color: var(--text-color-muted); font-size: 0.9rem;">
+            Relative disk space usage across topics. Hover for details.
+        </p>
+        <div class="disk-treemap">
+            {{$total := toInt64 0}}
+            {{range .TopicsDiskInfo}}{{$total = add64 $total (toInt64 .TotalSize)}}{{end}}
+            
+            {{$colors := list "rgb(52, 152, 219)" "rgb(46, 204, 113)" "rgb(155, 89, 182)" "rgb(241, 196, 15)" "rgb(230, 126, 34)" "rgb(231, 76, 60)" "rgb(149, 165, 166)" "rgb(52, 73, 94)"}}
+            
+                        {{range $i, $topic := .TopicsDiskInfo}}
+            
+                            {{$pct := div (toFloat64 $topic.TotalSize) (toFloat64 $total)}}
+            
+                            {{if gt $pct 0.01}}
+            
+             {{/* Only show if > 1% */}}
+                <div class="treemap-item" 
+                     title="{{$topic.Name}}: {{formatBytes $topic.TotalSize}} ({{printf "%.1f" (mul $pct 100.0)}}%)"
+                     style="width: {{printf "%.2f" (mul $pct 100.0)}}%; background-color: {{index $colors (mod $i 8)}};">
+                    <div class="treemap-label">{{$topic.Name}}</div>
+                </div>
+                {{end}}
+            {{end}}
+        </div>
+    </div>
+
 	<h2>Node: {{.NodeHostname}}</h2>
 
 	<h2>Overall Disk Usage</h2>

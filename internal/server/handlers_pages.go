@@ -314,11 +314,13 @@ type TopicPartitions struct {
 
 type PartitionsPageData struct {
 	BasePageData
-	TotalPartitions   int
-	PartitionsPerNode map[int]int
-	LeadersPerNode    map[int]int
-	Topics            map[string]*TopicPartitions
-	NodeHostname      string
+	TotalPartitions    int
+	PartitionsPerNode  map[int]int
+	LeadersPerNode     map[int]int
+	PartitionsPerShard map[int]map[int]int // nodeID -> shardID -> count
+	LeadersPerShard    map[int]map[int]int // nodeID -> shardID -> count
+	Topics             map[string]*TopicPartitions
+	NodeHostname       string
 }
 
 func (s *Server) buildHomePageData() HomePageData {
@@ -454,6 +456,8 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 
 	partitionsPerNode := make(map[int]int)
 	leadersPerNode := make(map[int]int)
+	partitionsPerShard := make(map[int]map[int]int)
+	leadersPerShard := make(map[int]map[int]int)
 	topics := make(map[string]*TopicPartitions, len(partitions)/10)
 
 	for _, p := range partitions {
@@ -468,12 +472,28 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 		for _, r := range p.Replicas {
 			replicas = append(replicas, r.NodeID)
 			partitionsPerNode[r.NodeID]++
+
+			if _, ok := partitionsPerShard[r.NodeID]; !ok {
+				partitionsPerShard[r.NodeID] = make(map[int]int)
+			}
+			partitionsPerShard[r.NodeID][r.Core]++
 		}
 
 		key := fmt.Sprintf("%s-%d", p.Topic, p.PartitionID)
 		leader := leaderMap[key]
 		if leader != -1 {
 			leadersPerNode[leader]++
+
+			// Find which core the leader is on
+			for _, r := range p.Replicas {
+				if r.NodeID == leader {
+					if _, ok := leadersPerShard[leader]; !ok {
+						leadersPerShard[leader] = make(map[int]int)
+					}
+					leadersPerShard[leader][r.Core]++
+					break
+				}
+			}
 		}
 
 		info := models.PartitionInfo{
@@ -489,11 +509,24 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 		topics[p.Topic].Partitions = append(topics[p.Topic].Partitions, info)
 	}
 
-	return PartitionsPageData{
-		TotalPartitions:   len(partitions),
-		PartitionsPerNode: partitionsPerNode,
-		LeadersPerNode:    leadersPerNode,
-		Topics:            topics,
-		NodeHostname:      s.nodeHostname,
+		return PartitionsPageData{
+
+			TotalPartitions:    len(partitions),
+
+			PartitionsPerNode:  partitionsPerNode,
+
+			LeadersPerNode:     leadersPerNode,
+
+			PartitionsPerShard: partitionsPerShard,
+
+			LeadersPerShard:    leadersPerShard,
+
+			Topics:             topics,
+
+			NodeHostname:       s.nodeHostname,
+
+		}
+
 	}
-}
+
+	
