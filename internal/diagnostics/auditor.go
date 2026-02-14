@@ -57,7 +57,7 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 	results = append(results, checkNetwork(data)...)
 
 	// 6. Bottleneck Checks
-	results = append(results, checkBottlenecks(s)...)
+	results = append(results, checkBottlenecks(data, s)...)
 
 	// 7. Crash Dump Checks (Critical)
 	results = append(results, checkCrashDumps(data)...)
@@ -133,6 +133,9 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 
 	// 31. Network Concurrency (AIO Control Blocks)
 	results = append(results, checkNetworkConcurrencyLimit(data, s)...)
+
+	// 32. Socket-level Health (ss)
+	results = append(results, checkSocketHealth(data)...)
 
 	return DiagnosticsReport{Results: results}
 }
@@ -1666,7 +1669,7 @@ func checkSysctl(sysctl map[string]string) []CheckResult {
 	return results
 }
 
-func checkBottlenecks(s store.Store) []CheckResult {
+func checkBottlenecks(data *cache.CachedData, s store.Store) []CheckResult {
 	var results []CheckResult
 
 	// Metrics required for performance analysis
@@ -1725,7 +1728,7 @@ func checkBottlenecks(s store.Store) []CheckResult {
 	metricsBundle.Files["store_metrics"] = allMetrics
 
 	// Run Analysis
-	report := analysis.AnalyzePerformance(metricsBundle)
+	report := analysis.AnalyzePerformance(metricsBundle, data.SarData)
 
 	// Convert Report to CheckResults
 
@@ -1934,53 +1937,88 @@ func checkRedpandaConfig(config map[string]interface{}) []CheckResult {
 func checkDisks(data *cache.CachedData) []CheckResult {
 	var results []CheckResult
 
+	dataDir := data.RedpandaDataDir
+	if dataDir == "" {
+		dataDir = "/var/lib/redpanda/data"
+	}
+	if data.StorageAnalysis != nil && data.StorageAnalysis.EffectiveDataDir != "" {
+		dataDir = data.StorageAnalysis.EffectiveDataDir
+	}
+
+	// Find best match FS for data directory
+	var dataDirFS models.FileSystemEntry
+	maxLen := -1
+	for _, fs := range data.System.FileSystems {
+		if strings.HasPrefix(dataDir, fs.MountPoint) {
+			if len(fs.MountPoint) > maxLen {
+				maxLen = len(fs.MountPoint)
+				dataDirFS = fs
+			}
+		}
+	}
+
+	isNoisyMount := func(mount string) bool {
+		noisyPrefixes := []string{"/etc/", "/dev/", "/proc/", "/sys/", "/run/secrets/", "/var/lib/kubelet/"}
+		for _, prefix := range noisyPrefixes {
+			if strings.HasPrefix(mount, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Check for high disk usage and Filesystem Type
 	for _, df := range data.System.FileSystems {
-		// Filter for likely data partitions (mounted on /var/lib/redpanda or similar, or just large ones)
-		// We'll check all that look like physical disks (starting with /dev/) or likely data mounts
-		if !strings.HasPrefix(df.Filesystem, "/dev/") && !strings.Contains(df.MountPoint, "redpanda") {
-			continue
-		}
+		isDataFS := (maxLen != -1 && df.MountPoint == dataDirFS.MountPoint)
+		isRedpandaMount := strings.Contains(df.MountPoint, "redpanda")
+		isPhysicalDisk := strings.HasPrefix(df.Filesystem, "/dev/")
 
-		// Check Filesystem Type (XFS preferred)
-		if df.Type != "xfs" {
-			results = append(results, CheckResult{
-				Category:      "Disk Configuration",
-				Name:          df.MountPoint + " Filesystem",
-				Description:   "Filesystem type for data directory",
-				CurrentValue:  df.Type,
-				ExpectedValue: "xfs",
-				Status:        SeverityWarning,
-				Remediation:   "Redpanda is optimized for XFS. Consider reformatting with XFS for better performance.",
-			})
-		} else {
-			results = append(results, CheckResult{
-				Category:      "Disk Configuration",
-				Name:          df.MountPoint + " Filesystem",
-				Description:   "Filesystem type for data directory",
-				CurrentValue:  df.Type,
-				ExpectedValue: "xfs",
-				Status:        SeverityPass,
-			})
-		}
-		
-		usePctStr := strings.TrimSuffix(df.UsePercent, "%")
-		usePct, _ := strconv.Atoi(usePctStr)
-
-		if usePct > 85 {
-			severity := SeverityWarning
-			if usePct > 95 {
-				severity = SeverityCritical
+		// We only want XFS warnings for Redpanda data locations
+		if isDataFS || isRedpandaMount {
+			// Check Filesystem Type (XFS preferred)
+			if df.Type != "xfs" {
+				results = append(results, CheckResult{
+					Category:      "Disk Configuration",
+					Name:          df.MountPoint + " Filesystem",
+					Description:   "Filesystem type for data directory",
+					CurrentValue:  df.Type,
+					ExpectedValue: "xfs",
+					Status:        SeverityWarning,
+					Remediation:   "Redpanda is optimized for XFS. Consider reformatting with XFS for better performance.",
+				})
+			} else {
+				results = append(results, CheckResult{
+					Category:      "Disk Configuration",
+					Name:          df.MountPoint + " Filesystem",
+					Description:   "Filesystem type for data directory",
+					CurrentValue:  df.Type,
+					ExpectedValue: "xfs",
+					Status:        SeverityPass,
+				})
 			}
-			results = append(results, CheckResult{
-				Category:      "Disk Usage",
-				Name:          df.MountPoint,
-				Description:   "Disk space usage",
-				CurrentValue:  df.UsePercent,
-				ExpectedValue: "< 85%",
-				Status:        severity,
-				Remediation:   "Free up space or expand disk capacity",
-			})
+		}
+
+		// Usage check: check data FS, redpanda mounts, AND physical disks
+		// BUT filter out small/irrelevant stuff that usually clutters df
+		if isDataFS || isRedpandaMount || (isPhysicalDisk && !isNoisyMount(df.MountPoint)) {
+			usePctStr := strings.TrimSuffix(df.UsePercent, "%")
+			usePct, _ := strconv.Atoi(usePctStr)
+
+			if usePct > 85 {
+				severity := SeverityWarning
+				if usePct > 95 {
+					severity = SeverityCritical
+				}
+				results = append(results, CheckResult{
+					Category:      "Disk Usage",
+					Name:          df.MountPoint,
+					Description:   "Disk space usage",
+					CurrentValue:  df.UsePercent,
+					ExpectedValue: "< 85%",
+					Status:        severity,
+					Remediation:   "Free up space or expand disk capacity",
+				})
+			}
 		}
 	}
 
@@ -2256,5 +2294,49 @@ func checkDataDirPartition(data *cache.CachedData) []CheckResult {
 		}
 	}
 	
+	return results
+}
+
+func checkSocketHealth(data *cache.CachedData) []CheckResult {
+	var results []CheckResult
+	if len(data.System.Connections) == 0 {
+		return results
+	}
+
+	highRetransCount := 0
+	worstConn := ""
+	maxRetrans := 0
+
+	for _, conn := range data.System.Connections {
+		if conn.TCPInfo != nil && conn.TCPInfo.RetransTotal > 50 {
+			highRetransCount++
+			if conn.TCPInfo.RetransTotal > maxRetrans {
+				maxRetrans = conn.TCPInfo.RetransTotal
+				worstConn = fmt.Sprintf("%s -> %s", conn.LocalAddr, conn.PeerAddr)
+			}
+		}
+	}
+
+	if highRetransCount > 0 {
+		results = append(results, CheckResult{
+			Category:      "Network Stack",
+			Name:          "Socket Retransmissions",
+			Description:   "Individual TCP connections are experiencing high retransmission counts",
+			CurrentValue:  fmt.Sprintf("%d connections affected (Worst: %d retrans on %s)", highRetransCount, maxRetrans, worstConn),
+			ExpectedValue: "0 or low retransmissions",
+			Status:        SeverityWarning,
+			Remediation:   "High per-socket retransmissions indicate packet loss on specific network paths. If many clients are affected, check the physical NIC or switch. If only one client is affected, investigate that client's network path.",
+		})
+	} else {
+		results = append(results, CheckResult{
+			Category:      "Network Stack",
+			Name:          "Socket Retransmissions",
+			Description:   "Individual TCP connections health",
+			CurrentValue:  "Healthy",
+			ExpectedValue: "Healthy",
+			Status:        SeverityPass,
+		})
+	}
+
 	return results
 }

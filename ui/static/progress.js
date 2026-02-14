@@ -11,13 +11,21 @@ function initProgress() {
             const data = JSON.parse(event.data);
             const progress = data.progress;
             const status = data.status;
+            const eta = data.eta;
             
             progressBar.style.width = progress + '%';
             progressBar.textContent = progress + '%';
             
             const statusEl = document.getElementById('loading-status');
             if (statusEl && status) {
-                statusEl.textContent = status;
+                let displayStatus = status;
+                if (eta > 0) {
+                    const mins = Math.floor(eta / 60);
+                    const secs = eta % 60;
+                    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                    displayStatus += ` (ETA: ${timeStr})`;
+                }
+                statusEl.textContent = displayStatus;
             }
 
             if (progress >= 100) {

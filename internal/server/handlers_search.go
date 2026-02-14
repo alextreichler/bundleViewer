@@ -172,6 +172,33 @@ func (s *Server) searchHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// 4. Search Partitions (NTPs)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		count := 0
+		for _, p := range s.cachedData.Partitions {
+			if count >= 20 { // Limit partition results
+				break
+			}
+			ntp := fmt.Sprintf("%s/%s/%d", p.Ns, p.Topic, p.PartitionID)
+			if strings.Contains(strings.ToLower(ntp), lowercaseQuery) || 
+			   strings.Contains(strings.ToLower(p.Topic), lowercaseQuery) {
+				mu.Lock()
+				results = append(results, SearchResult{
+					Category: "Partition",
+					Title:    ntp,
+					Link:     fmt.Sprintf("/partitions?topic=%s", p.Topic),
+					Preview:  template.HTML(fmt.Sprintf("Status: <b class='%s'>%s</b>, Leader: <b>%d</b> | <a href='/logs?search=\"%s\"'>View Logs</a>", 
+						map[bool]string{true: "text-warning", false: ""}[p.Status == "under_replicated"],
+						p.Status, p.LeaderID, ntp)),
+				})
+				count++
+				mu.Unlock()
+			}
+		}
+	}()
+
 	wg.Wait()
 
 	pageData := GlobalSearchPageData{

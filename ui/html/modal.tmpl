@@ -1,0 +1,38 @@
+{{define "modal"}}
+<div id="log-context-modal" class="modal">
+	<div class="modal-content">
+		<div class="modal-header">
+			<h2>Modal Header</h2>
+			<span class="close-button" onclick="closeModal()">&times;</span>
+		</div>
+		<div id="log-context-body" class="modal-body">
+			<!-- Content will be loaded here -->
+		</div>
+	</div>
+</div>
+
+<script>
+function closeModal() {
+    const modal = document.getElementById('log-context-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+// Close when clicking outside
+window.addEventListener('click', function(event) {
+    const modal = document.getElementById('log-context-modal');
+    if (modal && event.target === modal) {
+        modal.style.display = 'none';
+    }
+});
+
+// Close on escape
+window.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        const modal = document.getElementById('log-context-modal');
+        if (modal && modal.style.display === 'block') {
+            modal.style.display = 'none';
+        }
+    }
+});
+</script>
+{{end}}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alextreichler/bundleViewer/internal/cache"
+	"github.com/alextreichler/bundleViewer/internal/downloader"
 	"github.com/alextreichler/bundleViewer/internal/models"
 	"github.com/alextreichler/bundleViewer/internal/server"
 	"github.com/alextreichler/bundleViewer/internal/store"
@@ -43,6 +44,10 @@ func openBrowser(url string) {
 func main() {
 	port := flag.Int("port", 7575, "Port to listen on")
 	host := flag.String("host", "127.0.0.1", "Host to bind to (default: 127.0.0.1 for security)")
+	fetchURL := flag.String("fetch-url", "", "URL to download and extract a bundle from")
+	authToken := flag.String("auth-token", os.Getenv("AUTH_TOKEN"), "Secret token required to access the UI (can also be set via AUTH_TOKEN env var)")
+	shutdownTimeout := flag.Duration("shutdown-timeout", 0, "Hard limit on server lifetime (e.g., 20m). 0 means no limit.")
+	inactivityTimeout := flag.Duration("inactivity-timeout", 0, "Inactivity timeout (e.g., 5m). Shutdown if no UI heartbeats received. 0 means no limit.")
 	persist := flag.Bool("persist", false, "Persist the database between runs (default: clean on start)")
 	logsOnly := flag.Bool("logs-only", false, "Only process and display logs")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -101,6 +106,17 @@ func main() {
 	}
 	logger.Info("Using data directory", "path", dataDir)
 
+	// Fetch bundle from URL if provided
+	if *fetchURL != "" {
+		extractedPath, err := downloader.FetchAndExtractBundle(*fetchURL, dataDir)
+		if err != nil {
+			logger.Error("Failed to fetch and extract bundle", "url", *fetchURL, "error", err)
+			os.Exit(1)
+		}
+		// Standardize args so the rest of the logic uses the extracted path
+		os.Args = append(os.Args[:1], extractedPath)
+	}
+
 	// Manually check for flags in trailing arguments (standard flag package stops at first non-flag)
 	args := flag.Args()
 	var bundlePath string
@@ -148,7 +164,7 @@ func main() {
 		storeInterface = sqliteStore
 	}
 
-	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress, Version, latestVersion) // Pass logger, logsOnly, persist
+	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress, Version, latestVersion, *authToken, *shutdownTimeout, *inactivityTimeout) // Pass logger, logsOnly, persist
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)

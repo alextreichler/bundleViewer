@@ -334,6 +334,37 @@
     </div>
     {{end}}
 
+    <!-- Block Devices -->
+    {{if .System.BlockDevices}}
+    <div class="card">
+        <h3>Block Devices (lsblk)</h3>
+        <table class="sortable-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Mount</th>
+                    <th>Scheduler</th>
+                    <th>Model</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .System.BlockDevices}}
+                <tr>
+                    <td style="font-family: var(--font-mono); font-weight: bold;">{{.Name}}</td>
+                    <td>{{.Type}}</td>
+                    <td>{{.Size}}</td>
+                    <td>{{.MountPoint}}</td>
+                    <td><span class="status-tag {{if eq .Scheduler "none"}}status-healthy{{else}}status-warning{{end}}">{{.Scheduler}}</span></td>
+                    <td style="font-size: 0.85em; color: var(--text-color-muted);">{{.Model}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+
     <!-- Disk Usage -->
     <div class="card">
         <h3>File Systems</h3>
@@ -417,8 +448,9 @@
                         <th>State</th>
                         <th>Local Address</th>
                         <th>Peer Address</th>
-                        <th>Recv-Q</th>
-                        <th>Send-Q</th>
+                        <th>RTT / Var</th>
+                        <th>CWND</th>
+                        <th>Retrans</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -428,8 +460,17 @@
                         <td>{{.State}}</td>
                         <td>{{.LocalAddr}}</td>
                         <td>{{.PeerAddr}}</td>
-                        <td>{{.RecvQ}}</td>
-                        <td>{{.SendQ}}</td>
+                        <td>
+                            {{if .TCPInfo}}
+                                {{printf "%.1f" .TCPInfo.Rtt}}ms / {{printf "%.1f" .TCPInfo.RttVar}}ms
+                            {{else}}-{{end}}
+                        </td>
+                        <td>{{if .TCPInfo}}{{.TCPInfo.Cwnd}}{{else}}-{{end}}</td>
+                        <td style="{{if and .TCPInfo (gt .TCPInfo.Retrans 0)}}color: var(--danger-color); font-weight: bold;{{end}}">
+                            {{if .TCPInfo}}
+                                {{.TCPInfo.Retrans}} / {{.TCPInfo.RetransTotal}}
+                            {{else}}-{{end}}
+                        </td>
                     </tr>
                     {{end}}
                 </tbody>

@@ -1,4 +1,4 @@
-package analysis
+package logutil
 
 import (
 	"regexp"
@@ -111,6 +111,48 @@ var CommonErrorKnowledgeBase = []LogInsight{
 		Description: "Schema Registry Error. An error occurred in the Schema Registry component.",
 		Severity:    "Warning",
 		Action:      "Check the schema registry logs for specific validation or storage errors.",
+	},
+	{
+		Pattern:     `reconfiguration_stm.*moving partition`,
+		Description: "Partition Movement. A partition is being relocated to different nodes.",
+		Severity:    "Info",
+		Action:      "Check if this was triggered by the partition balancer or a manual 'rpk cluster partitions move'.",
+	},
+	{
+		Pattern:     `reconfiguration_stm.*finishing reconfiguration`,
+		Description: "Partition Movement Finished. The relocation of a partition has completed successfully.",
+		Severity:    "Info",
+		Action:      "Normal lifecycle event.",
+	},
+	{
+		Pattern:     `leadership_balancer.*transferring leadership`,
+		Description: "Automatic Leadership Rebalance. The leadership balancer is moving a leader to improve cluster balance.",
+		Severity:    "Info",
+		Action:      "Normal background operation if 'enable_leader_balancer' is true.",
+	},
+	{
+		Pattern:     `health_monitor.*detected node.*is down`,
+		Description: "Node Down Detected. The cluster health monitor has flagged a node as unresponsive.",
+		Severity:    "Critical",
+		Action:      "Investigate the specific node for crashes, OOMs, or network isolation.",
+	},
+	{
+		Pattern:     `became the leader term`,
+		Description: "Raft Leadership Election. A node successfully became the leader of a partition.",
+		Severity:    "Info",
+		Action:      "Informational. Useful for tracking leadership stability.",
+	},
+	{
+		Pattern:     `Stepping down as leader in term.*reasoning: leadership_transfer`,
+		Description: "Manual Leadership Transfer. The leader is stepping down because a transfer was requested (e.g., by the automatic balancer or an admin).",
+		Severity:    "Info",
+		Action:      "Check if partition balancing is active or if a move was manually initiated.",
+	},
+	{
+		Pattern:     `Stepping down as leader in term.*reasoning: heartbeats_majority`,
+		Description: "Loss of Majority. The leader stepped down because it lost contact with a majority of its followers.",
+		Severity:    "Warning",
+		Action:      "Check for network partitions, high CPU load, or disk stalls causing heartbeats to fail. Consider increasing 'election_timeout_ms' if the environment is unstable.",
 	},
 	{
 		Pattern:     `ghost_record_batch`,

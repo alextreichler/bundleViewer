@@ -333,6 +333,14 @@ th, td {
     padding: 0.75rem 1rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
+    word-break: break-word; /* Prevent long strings from stretching tables */
+}
+
+.table-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 1.5rem;
 }
 
 th {
@@ -355,6 +363,12 @@ tr:hover td {
     background-color: color-mix(in srgb, var(--primary-color) 5%, transparent);
 }
 
+tr:target td {
+    background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+}
+
 /* Utility: Badges */
 .badge {
     display: inline-flex;
@@ -367,6 +381,12 @@ tr:hover td {
     background-color: var(--border-color);
     color: var(--text-color);
 }
+
+.bg-danger { background-color: #ef4444 !important; }
+.bg-warning { background-color: #f59e0b !important; }
+.bg-primary { background-color: var(--primary-color) !important; }
+.bg-info { background-color: #3b82f6 !important; }
+.bg-secondary { background-color: #64748b !important; }
 
 /* Log Analysis Specifics */
 .log-level-ERROR { color: #ef4444; }
@@ -507,6 +527,21 @@ nav {
 /* Grid Layouts */
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
 .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+
+#loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid var(--border-color);
+    border-top: 4px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
 
 /* Timeline Specifics */
 .timeline-container::after {
@@ -864,9 +899,113 @@ th.sortable-header.sorted-asc::after {
     background: var(--bg-color);
 }
 
+.alert-box {
+    background-color: #fffbeb;
+    color: #92400e;
+    padding: 1rem;
+    border-radius: var(--radius);
+    border: 1px solid #f59e0b;
+}
+
+.alert-box strong {
+    font-size: 1.1rem;
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
 .text-warning {
     color: #f59e0b;
     font-weight: 600;
+}
+
+/* Modal styles */
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1001; /* Sit on top of everything */
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto; /* Enable scroll if needed */
+    background-color: rgba(0,0,0,0.6); /* Black w/ opacity */
+}
+
+.modal-content {
+    background-color: var(--card-bg);
+    margin: 5% auto;
+    padding: 20px;
+    border: 1px solid var(--border-color);
+    width: 80%;
+    max-width: 1200px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    color: var(--text-color);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+    margin: 0;
+}
+
+.close-button {
+    color: var(--text-color-muted);
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close-button:hover,
+.close-button:focus {
+    color: var(--text-color);
+}
+
+.modal-body {
+    padding-top: 15px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap; /* Wrap long lines */
+    background-color: var(--bg-color);
+    border-radius: 4px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.log-context-line {
+    border-bottom: 2px solid var(--border-color);
+    padding: 8px 10px;
+}
+
+.log-context-line.even-line {
+    background-color: var(--bg-color);
+}
+
+.log-context-line.odd-line {
+    background-color: var(--table-alt-row-bg);
+}
+
+:root {
+    --highlight-bg: #ffd700; /* Gold for light mode */
+}
+
+[data-theme="dark"] {
+    --highlight-bg: #5a5200; /* Darker, less vibrant yellow for dark mode */
+}
+
+[data-theme="ultra-dark"] {
+    --highlight-bg: #403e00; /* Even darker for ultra-dark, good contrast */
+}
+
+[data-theme="retro"] {
+    --highlight-bg: #4a148c; /* A deep violet for retro highlight, providing good contrast with neon text */
 }
 
 

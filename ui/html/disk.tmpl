@@ -7,41 +7,67 @@
 	<script src="/static/theme.js"></script>
 </head>
 <body>
-	<div id="loading-overlay">
-		<div id="loading-box">
-			<h2>Loading...</h2>
-			<div id="progress-container">
-				<div id="progress-bar">0%</div>
-			</div>
-            <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem; text-align: center;"></p>
-		</div>
-	</div>
     {{template "nav" .}}
 	<h1>Disk Overview</h1>
 
     <div class="viz-container">
-        <h2 class="viz-title">📊 Topic Disk Distribution</h2>
+        <h2 class="viz-title">📊 Disk Space Analysis</h2>
+        
+        <div class="disk-usage-summary">
+            <div class="summary-header">
+                <h3 class="summary-title">Overall Node Disk Usage</h3>
+                <div class="summary-stats">
+                    Total: {{.DataDiskStats.TotalBytes | formatBytes}} | 
+                    Free: {{.DataDiskStats.FreeBytes | formatBytes}} ({{percent .DataDiskStats.FreeBytes .DataDiskStats.TotalBytes | printf "%.1f"}}%)
+                </div>
+            </div>
+            
+            {{$usedBytes := sub .DataDiskStats.TotalBytes .DataDiskStats.FreeBytes}}
+            {{$topicsBytes := toInt64 0}}
+            {{range .TopicsDiskInfo}}{{$topicsBytes = add64 $topicsBytes (toInt64 .TotalSize)}}{{end}}
+            {{$otherBytes := sub $usedBytes $topicsBytes}}
+            {{if lt $otherBytes 0}}{{$otherBytes = 0}}{{end}}
+            
+            <div class="usage-bar-total">
+                <div class="bar-segment topics" style="width: {{percent $topicsBytes .DataDiskStats.TotalBytes}}%" title="Topics: {{formatBytes $topicsBytes}}">
+                    {{if gt (percent $topicsBytes .DataDiskStats.TotalBytes) 10.0}}Topics{{end}}
+                </div>
+                <div class="bar-segment other" style="width: {{percent $otherBytes .DataDiskStats.TotalBytes}}%" title="Other Files: {{formatBytes $otherBytes}}">
+                    {{if gt (percent $otherBytes .DataDiskStats.TotalBytes) 10.0}}Other{{end}}
+                </div>
+                <div class="bar-segment free" style="width: {{percent .DataDiskStats.FreeBytes .DataDiskStats.TotalBytes}}%" title="Free Space: {{formatBytes .DataDiskStats.FreeBytes}}">
+                    {{if gt (percent .DataDiskStats.FreeBytes .DataDiskStats.TotalBytes) 10.0}}Free{{end}}
+                </div>
+            </div>
+            
+            <div class="summary-legend">
+                <div class="legend-item"><span class="legend-dot topics"></span> Topics ({{formatBytes $topicsBytes}})</div>
+                <div class="legend-item"><span class="legend-dot other"></span> Other Files ({{formatBytes $otherBytes}})</div>
+                <div class="legend-item"><span class="legend-dot free"></span> Free Space ({{formatBytes .DataDiskStats.FreeBytes}})</div>
+            </div>
+        </div>
+
+        <h3 class="viz-title">📂 Topic Distribution</h3>
         <p style="margin-bottom: 1rem; color: var(--text-color-muted); font-size: 0.9rem;">
-            Relative disk space usage across topics. Hover for details.
+            Relative disk space usage across topics. Hover for details. Showing topics > 1% of total topic usage.
         </p>
         <div class="disk-treemap">
-            {{$total := toInt64 0}}
-            {{range .TopicsDiskInfo}}{{$total = add64 $total (toInt64 .TotalSize)}}{{end}}
+            {{$topicsTotal := toInt64 0}}
+            {{range .TopicsDiskInfo}}{{$topicsTotal = add64 $topicsTotal (toInt64 .TotalSize)}}{{end}}
+            {{if eq $topicsTotal 0}}{{$topicsTotal = 1}}{{end}}
             
-            {{$colors := list "rgb(52, 152, 219)" "rgb(46, 204, 113)" "rgb(155, 89, 182)" "rgb(241, 196, 15)" "rgb(230, 126, 34)" "rgb(231, 76, 60)" "rgb(149, 165, 166)" "rgb(52, 73, 94)"}}
+            {{$colors := list "#3b82f6" "#10b981" "#f59e0b" "#ef4444" "#8b5cf6" "#ec4899" "#06b6d4" "#f97316" "#14b8a6" "#6366f1" "#4ade80" "#60a5fa" "#fbbf24" "#f87171" "#a78bfa" "#f472b6" "#22d3ee" "#fb923c" "#2dd4bf" "#818cf8"}}
             
-                        {{range $i, $topic := .TopicsDiskInfo}}
-            
-                            {{$pct := div (toFloat64 $topic.TotalSize) (toFloat64 $total)}}
-            
-                            {{if gt $pct 0.01}}
-            
-             {{/* Only show if > 1% */}}
-                <div class="treemap-item" 
-                     title="{{$topic.Name}}: {{formatBytes $topic.TotalSize}} ({{printf "%.1f" (mul $pct 100.0)}}%)"
-                     style="width: {{printf "%.2f" (mul $pct 100.0)}}%; background-color: {{index $colors (mod $i 8)}};">
-                    <div class="treemap-label">{{$topic.Name}}</div>
-                </div>
+            {{range $i, $topic := .TopicsDiskInfo}}
+                {{$pct := div (toFloat64 $topic.TotalSize) (toFloat64 $topicsTotal)}}
+                {{if gt $pct 0.01}}
+                    <div class="treemap-item" 
+                         onclick="window.location.hash = '#{{$topic.Name}}-row';"
+                         title="{{$topic.Name}}: {{formatBytes $topic.TotalSize}} ({{printf "%.1f" (mul $pct 100.0)}}% of topics)"
+                         style="flex: {{mul $pct 100.0}} 1 {{mul $pct 100.0}}%; background-color: {{index $colors (mod $i (len $colors))}};">
+                        <div class="treemap-label">{{$topic.Name}}</div>
+                        <div class="treemap-size">{{formatBytes $topic.TotalSize}}</div>
+                    </div>
                 {{end}}
             {{end}}
         </div>
@@ -89,7 +115,7 @@
 		</thead>
 		<tbody>
 			{{range .TopicsDiskInfo}}
-			<tr class="main-row" data-details-id="{{.Name}}-details">
+			<tr id="{{.Name}}-row" class="main-row" data-details-id="{{.Name}}-details">
 				<td><a href="#" onclick="toggleVisibility('{{.Name}}-details'); return false;">{{.Name}}</a></td>
                 <td data-value="{{if .Active}}1{{else}}0{{end}}" {{if not .Active}}style="color: var(--danger-color, red); font-weight: bold;"{{end}}>{{if .Active}}Yes{{else}}No{{end}}</td>
                 <td data-value="{{.SegmentCount}}">{{.SegmentCount}}</td>

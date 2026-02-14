@@ -2,6 +2,63 @@
 
 window.explorerChart = null;
 
+// Helper to get timestamp from URL
+function getTargetTimestamp() {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('t');
+    if (!t) return null;
+    return new Date(t).getTime();
+}
+
+// Vertical line plugin for Chart.js
+const verticalLinePlugin = {
+    id: 'verticalLine',
+    afterDraw: (chart, args, opts) => {
+        if (!opts.timestamp) return;
+        
+        const timestamp = opts.timestamp;
+        const xAxis = chart.scales.x;
+        const yAxis = chart.scales.y;
+        
+        // Find x position. Works for both linear (numeric ms) and category (string) scales
+        let xPos;
+        if (xAxis.type === 'linear') {
+            if (timestamp < xAxis.min || timestamp > xAxis.max) return;
+            xPos = xAxis.getPixelForValue(timestamp);
+        } else {
+            // For category scales (SAR charts), we need to find the closest index
+            // SAR labels are HH:mm:ss
+            const targetStr = new Date(timestamp).toISOString().substring(11, 19);
+            if (!chart.data.labels) return;
+            const index = chart.data.labels.indexOf(targetStr);
+            if (index === -1) {
+                // Try finding closest if not exact match? 
+                // For now just skip if not in range
+                return;
+            }
+            xPos = xAxis.getPixelForValue(chart.data.labels[index]);
+        }
+
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(xPos, yAxis.top);
+        ctx.lineTo(xPos, yAxis.bottom);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ef4444'; // Red
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        
+        // Label
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('LOG EVENT', xPos, yAxis.top - 5);
+        
+        ctx.restore();
+    }
+};
+
 window.loadMetricData = async function() {
     const selector = document.getElementById('metric-selector');
     const metricName = selector.value;
@@ -46,6 +103,8 @@ window.renderExplorerChart = function(title, seriesData, asRate) {
         '#36a2eb', '#ff6384', '#4bc0c0', '#ff9f40', '#9966ff', '#ffcd56', '#c9cbcf',
         '#00ff00', '#00ffff', '#ff00ff', '#ffff00'
     ];
+
+    const targetT = getTargetTimestamp();
 
     const datasets = seriesData.map((s, index) => {
         const color = colors[index % colors.length];
@@ -99,6 +158,7 @@ window.renderExplorerChart = function(title, seriesData, asRate) {
         data: {
             datasets: datasets
         },
+        plugins: [verticalLinePlugin],
         options: {
             responsive: true,
             maintainAspectRatio: false,
@@ -111,6 +171,9 @@ window.renderExplorerChart = function(title, seriesData, asRate) {
                 intersect: false
             },
             plugins: {
+                verticalLine: {
+                    timestamp: targetT
+                },
                 decimation: {
                     enabled: true,
                     algorithm: 'lttb',
@@ -171,6 +234,8 @@ window.initSarChart = function(labels, userCpu, sysCpu, idleCpu) {
     const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
     const textColor = isDarkMode ? '#ddd' : '#666';
 
+    const targetT = getTargetTimestamp();
+
     new Chart(ctx, {
         type: 'line',
         data: {
@@ -203,6 +268,7 @@ window.initSarChart = function(labels, userCpu, sysCpu, idleCpu) {
                 }
             ]
         },
+        plugins: [verticalLinePlugin],
         options: {
             responsive: true,
             maintainAspectRatio: false,
@@ -210,12 +276,94 @@ window.initSarChart = function(labels, userCpu, sysCpu, idleCpu) {
                 mode: 'index',
                 intersect: false,
             },
+            plugins: {
+                verticalLine: {
+                    timestamp: targetT
+                }
+            },
             scales: {
                 y: {
                     beginAtZero: true,
                     max: 100,
                     title: { display: true, text: 'Percentage' },
                     grid: { color: gridColor },
+                    ticks: { color: textColor }
+                },
+                x: {
+                    grid: { color: gridColor },
+                    ticks: { color: textColor }
+                }
+            }
+        }
+    });
+};
+
+window.initSarNetChart = function(labels, retrans, throughput) {
+    const canvas = document.getElementById('sarNetChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark' || document.documentElement.getAttribute('data-theme') === 'ultra-dark';
+    const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+    const textColor = isDarkMode ? '#ddd' : '#666';
+
+    const targetT = getTargetTimestamp();
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'TCP Retransmissions (/s)',
+                    data: retrans,
+                    borderColor: 'rgba(255, 159, 64, 1)',
+                    backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                    yAxisID: 'y',
+                    fill: true,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Peak Throughput (MB/s)',
+                    data: throughput,
+                    borderColor: 'rgba(153, 102, 255, 1)',
+                    backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                    yAxisID: 'y1',
+                    fill: false,
+                    pointRadius: 0
+                }
+            ]
+        },
+        plugins: [verticalLinePlugin],
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            plugins: {
+                verticalLine: {
+                    timestamp: targetT
+                }
+            },
+            scales: {
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    beginAtZero: true,
+                    title: { display: true, text: 'Retransmissions /s', color: 'rgba(255, 159, 64, 1)' },
+                    grid: { color: gridColor },
+                    ticks: { color: textColor }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    beginAtZero: true,
+                    title: { display: true, text: 'Throughput (MB/s)', color: 'rgba(153, 102, 255, 1)' },
+                    grid: { drawOnChartArea: false },
                     ticks: { color: textColor }
                 },
                 x: {
@@ -279,3 +427,17 @@ window.initShardCpuChart = function(labels, data) {
         }
     });
 };
+
+// Initialize correlation features
+document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('t')) {
+        // Scroll to the historical charts (SAR) which are most likely to show the event
+        const historicalChart = document.getElementById('sarCpuChart');
+        if (historicalChart) {
+            setTimeout(() => {
+                historicalChart.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 800);
+        }
+    }
+});

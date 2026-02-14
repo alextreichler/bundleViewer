@@ -79,10 +79,21 @@ function initDeepLinking() {
     }
 }
 
+// Heartbeat logic to keep ephemeral sessions alive
+function initHeartbeat() {
+    // Ping every 30 seconds
+    setInterval(() => {
+        fetch('/api/heartbeat', { method: 'POST' })
+            .catch(err => console.debug('Heartbeat failed', err));
+    }, 30000);
+}
+
 // Initial load trigger
 if (document.readyState === 'loading') {
     document.addEventListener("DOMContentLoaded", function() {
         initDeepLinking();
+        initHeartbeat();
+        initNavigationLoading();
         // Add HTMX listener
         document.body.addEventListener('htmx:afterOnLoad', function(evt) {
             initDeepLinking();
@@ -90,12 +101,54 @@ if (document.readyState === 'loading') {
     });
 } else {
     initDeepLinking();
+    initNavigationLoading();
     if (!window.htmxCommonListenerAdded) {
         document.body.addEventListener('htmx:afterOnLoad', function(evt) {
             initDeepLinking();
         });
         window.htmxCommonListenerAdded = true;
     }
+}
+
+function initNavigationLoading() {
+    const overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+
+    // Handle standard link clicks
+    document.querySelectorAll('nav a, .button, a.button').forEach(link => {
+        // Skip links that are:
+        // 1. External
+        // 2. Hash-only
+        // 3. Have hx-boost="false" (if applicable)
+        const href = link.getAttribute('href');
+        if (!href || href.startsWith('http') || href.startsWith('#')) return;
+
+        link.addEventListener('click', (e) => {
+            // Check if it's a normal click (not cmd/ctrl+click)
+            if (e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                overlay.style.display = 'flex';
+                // Reset progress bar if it exists
+                const bar = document.getElementById('progress-bar');
+                if (bar) bar.style.width = '0%';
+                const status = document.getElementById('progress-status');
+                if (status) {
+                    status.style.display = 'none';
+                    status.textContent = '';
+                }
+            }
+        });
+    });
+
+    // Handle HTMX requests
+    document.body.addEventListener('htmx:beforeRequest', (evt) => {
+        overlay.style.display = 'flex';
+    });
+    document.body.addEventListener('htmx:afterRequest', (evt) => {
+        // Wait a tiny bit for the render to catch up
+        setTimeout(() => {
+            overlay.style.display = 'none';
+        }, 100);
+    });
 }
 
 function highlightAndScroll(container, text) {

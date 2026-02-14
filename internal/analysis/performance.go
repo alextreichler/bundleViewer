@@ -14,10 +14,11 @@ type PerformanceReport struct {
 	WorkloadType    string // "Produce-Heavy", "Fetch-Heavy", "Balanced", "Idle"
 	Recommendations []string
 	Observations    []string
+	NetworkReport   *NetworkHealthReport
 }
 
 // AnalyzePerformance evaluates the metrics bundle against known performance heuristics
-func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
+func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) PerformanceReport {
 	report := PerformanceReport{
 		Recommendations: []string{},
 		Observations:    []string{},
@@ -25,6 +26,17 @@ func AnalyzePerformance(metrics *models.MetricsBundle) PerformanceReport {
 
 	if metrics == nil {
 		return report
+	}
+
+	// Network Deep Dive (if SAR data is available)
+	report.NetworkReport = AnalyzeNetwork(sar, metrics)
+	if report.NetworkReport != nil {
+		for _, anomaly := range report.NetworkReport.DetectedAnomalies {
+			report.Observations = append(report.Observations, anomaly)
+		}
+		for _, rec := range report.NetworkReport.Recommendations {
+			report.Recommendations = append(report.Recommendations, rec)
+		}
 	}
 
 	// 1. CPU Analysis

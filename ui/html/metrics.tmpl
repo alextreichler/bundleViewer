@@ -190,6 +190,73 @@
         </div>
     </div>
 
+    {{if .PerformanceReport.NetworkReport}}
+    <div class="metric-card">
+        <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1.25rem;">📡</span> Network Stack Deep-Dive (SAR)
+        </h3>
+        <p style="font-size: 0.9em; color: var(--text-color-muted); margin-bottom: 1.5rem;">
+            Deep analysis of network interface performance and TCP stack health.
+        </p>
+        
+        <div class="grid-4" style="margin-bottom: 2rem;">
+            <div>
+                <div class="metric-label">Max Interface Util</div>
+                <div class="metric-value {{if gt .PerformanceReport.NetworkReport.MaxInterfaceUtil 80.0}}text-danger{{else if gt .PerformanceReport.NetworkReport.MaxInterfaceUtil 50.0}}text-warning{{end}}">
+                    {{printf "%.1f" .PerformanceReport.NetworkReport.MaxInterfaceUtil}}%
+                </div>
+            </div>
+            <div>
+                <div class="metric-label">Peak Throughput</div>
+                <div class="metric-value">{{printf "%.1f" .PerformanceReport.NetworkReport.PeakThroughputMBps}} MB/s</div>
+            </div>
+            <div>
+                <div class="metric-label">Peak TCP Retrans</div>
+                <div class="metric-value {{if gt .PerformanceReport.NetworkReport.MaxRetransRate 5.0}}text-danger{{else if gt .PerformanceReport.NetworkReport.MaxRetransRate 1.0}}text-warning{{end}}">
+                    {{printf "%.2f" .PerformanceReport.NetworkReport.MaxRetransRate}}/s
+                </div>
+            </div>
+            <div>
+                <div class="metric-label">Avg TCP Retrans</div>
+                <div class="metric-value">{{printf "%.2f" .PerformanceReport.NetworkReport.AvgRetransRate}}/s</div>
+            </div>
+        </div>
+
+        {{if or .PerformanceReport.NetworkReport.DetectedAnomalies .PerformanceReport.NetworkReport.Recommendations}}
+        <div style="background: rgba(0,0,0,0.02); padding: 1rem; border-radius: var(--radius); border-left: 4px solid var(--primary-color); margin-bottom: 1.5rem;">
+            {{range .PerformanceReport.NetworkReport.DetectedAnomalies}}
+                <div style="font-weight: 600; color: var(--text-color); margin-bottom: 0.25rem;">⚠️ {{.}}</div>
+            {{end}}
+            {{range .PerformanceReport.NetworkReport.Recommendations}}
+                <div style="font-size: 0.9rem; color: var(--text-color-muted); margin-bottom: 0.5rem; padding-left: 1.5rem;">💡 {{.}}</div>
+            {{end}}
+        </div>
+        {{end}}
+
+        <div style="height: 300px;">
+            <canvas id="sarNetChart"></canvas>
+        </div>
+        <script>
+            (function() {
+                const labels = [
+                    {{range .SarData.Entries}}"{{.Timestamp.Format "15:04:05"}}",{{end}}
+                ];
+                const retrans = [{{range .SarData.Entries}}{{.TcpRetransRate}},{{end}}];
+                const throughput = [{{range .SarData.Entries}}{{.PeakThroughputMBps}},{{end}}];
+
+                function tryInit() {
+                    if (window.initSarNetChart) {
+                        window.initSarNetChart(labels, retrans, throughput);
+                    } else {
+                        setTimeout(tryInit, 50);
+                    }
+                }
+                tryInit();
+            })();
+        </script>
+    </div>
+    {{end}}
+
     {{if .SarData.Entries}}
     <div class="metric-card">
         <h3>Historical CPU Usage (SAR)</h3>

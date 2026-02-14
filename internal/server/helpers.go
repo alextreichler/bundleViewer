@@ -155,7 +155,9 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 
 	switch v := data.(type) {
 	case []models.ClusterConfigEntry:
-		buf.WriteString("<table><thead><tr><th>Config (key)</th><th>Value</th><th>Doc Link</th></tr></thead><tbody>")
+		buf.WriteString("<div style=\"margin-bottom: 1rem;\"><a href=\"https://docs.redpanda.com/current/reference/properties/cluster-properties/\" target=\"_blank\" style=\"font-weight: 600; text-decoration: underline; color: var(--link-color);\">Redpanda Cluster Configuration Documentation &rarr;</a></div>")
+		buf.WriteString("<div class=\"table-container\">")
+		buf.WriteString("<table class=\"sortable-table\"><thead><tr><th>Config (key)</th><th>Value</th><th>Doc Link</th></tr></thead><tbody>")
 		for _, entry := range v {
 			buf.WriteString("<tr>")
 			buf.WriteString(fmt.Sprintf("<td>%s</td>", template.HTMLEscapeString(entry.Key)))
@@ -176,6 +178,7 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 			buf.WriteString("</tr>")
 		}
 		buf.WriteString("</tbody></table>")
+		buf.WriteString("</div>")
 
 	case map[string]interface{}:
 		keys := make([]string, 0, len(v))
@@ -184,6 +187,7 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 		}
 		sort.Strings(keys)
 
+		buf.WriteString("<div class=\"table-container\">")
 		buf.WriteString("<table class=\"sortable-table\"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>")
 		count := 0
 		for _, k := range keys {
@@ -210,6 +214,7 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 			count++
 		}
 		buf.WriteString("</tbody></table>")
+		buf.WriteString("</div>")
 
 	case []interface{}:
 		if len(v) == 0 {
@@ -272,6 +277,7 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 			sort.Strings(otherHeaders)
 			headers = append(headers, otherHeaders...)
 
+			buf.WriteString("<div class=\"table-container\">")
 			buf.WriteString("<table class=\"sortable-table\"><thead><tr>")
 			for _, h := range headers {
 				displayHeader := template.HTMLEscapeString(h)
@@ -316,6 +322,7 @@ func renderDataLazy(fileName string, jsonPath string, data interface{}, currentD
 				buf.WriteString("</tr>")
 			}
 			buf.WriteString("</tbody></table>")
+			buf.WriteString("</div>")
 		} else {
 			// Simple array
 			buf.WriteString("<ul>")

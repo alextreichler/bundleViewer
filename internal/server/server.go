@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/alextreichler/bundleViewer/internal/cache"
@@ -127,11 +129,16 @@ type Server struct {
 	skewTemplate        *template.Template
 	searchTemplate      *template.Template
 	diagnosticsTemplate *template.Template
+	consensusTemplate   *template.Template
 	segmentsTemplate    *template.Template
 	segmentViewTemplate *template.Template
 	cpuProfilesTemplate *template.Template
 	notebookTemplate    *template.Template
 	logsOnly            bool
+	authToken           string
+	shutdownTimeout     time.Duration
+	inactivityTimeout   time.Duration
+	lastHeartbeat       int64 // Unix timestamp
 	currentVersion      string
 	latestVersion       string
 	updateAvailable     bool
@@ -172,11 +179,97 @@ func (s *Server) newBasePageData(active string) BasePageData {
 	}
 }
 
+// AuthMiddleware checks for a valid auth token if configured
+func (s *Server) heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	atomic.StoreInt64(&s.lastHeartbeat, time.Now().Unix())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) startTimeoutWatcher() {
+	if s.shutdownTimeout == 0 && s.inactivityTimeout == 0 {
+		return
+	}
+
+	startTime := time.Now()
+	ticker := time.NewTicker(30 * time.Second)
+
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+
+			// Check hard shutdown timeout
+			if s.shutdownTimeout > 0 && now.Sub(startTime) > s.shutdownTimeout {
+				s.logger.Info("Hard shutdown timeout reached. Shutting down...", "timeout", s.shutdownTimeout)
+				syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+				return
+			}
+
+			// Check inactivity timeout
+			if s.inactivityTimeout > 0 {
+				last := atomic.LoadInt64(&s.lastHeartbeat)
+				if now.Unix()-last > int64(s.inactivityTimeout.Seconds()) {
+					s.logger.Info("Inactivity timeout reached. Shutting down...", "timeout", s.inactivityTimeout)
+					syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authToken == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check for token in query param
+		token := r.URL.Query().Get("token")
+		if token == s.authToken {
+			// Valid token in URL, set cookie and redirect to same page without token
+			http.SetCookie(w, &http.Cookie{
+				Name:     "bv_token",
+				Value:    token,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   3600 * 24, // 1 day
+			})
+			
+			// Remove token from query string and redirect
+			q := r.URL.Query()
+			q.Del("token")
+			r.URL.RawQuery = q.Encode()
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+
+		// Check for token in cookie
+		cookie, err := r.Cookie("bv_token")
+		if err == nil && cookie.Value == s.authToken {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Allow static files to be served? 
+		// For true security, we should probably block everything except maybe a login page.
+		// But since we want "Launch -> Open", we'll just block everything with a 401.
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			// Optimization: allow static files so login page looks good (if we had one)
+			// But for now let's just be strict.
+		}
+
+		http.Error(w, "Unauthorized: Valid token required via ?token=... or cookie", http.StatusUnauthorized)
+	})
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker, currentVersion, latestVersion string) (http.Handler, error) { // Accept both
+func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker, currentVersion, latestVersion, authToken string, shutdownTimeout, inactivityTimeout time.Duration) (http.Handler, error) { // Accept both
 	funcMap := template.FuncMap{
 		"renderData": func(key string, data interface{}) template.HTML {
 			return renderDataLazy(key, "", data, 0, 0)
@@ -266,6 +359,9 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		"replace": func(s, old, new string) string {
 			return strings.ReplaceAll(s, old, new)
 		},
+		"formatTime": func(t time.Time) string {
+			return t.Format("2006-01-02T15:04:05")
+		},
 		"sumRestarts": func(statuses []models.K8sContainerStatus) int {
 			sum := 0
 			for _, s := range statuses {
@@ -275,6 +371,20 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		},
 		"add": func(a, b int) int {
 			return a + b
+		},
+		"addf64": func(a, b interface{}) float64 {
+			var va, vb float64
+			switch v := a.(type) {
+			case int: va = float64(v)
+			case int64: va = float64(v)
+			case float64: va = v
+			}
+			switch v := b.(type) {
+			case int: vb = float64(v)
+			case int64: vb = float64(v)
+			case float64: vb = v
+			}
+			return va + vb
 		},
 		"add64": func(a, b interface{}) int64 {
 			var va, vb int64
@@ -382,7 +492,7 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		return nil, fmt.Errorf("failed to parse setup template: %w", err)
 	}
 
-	partitionsTemplate, err := template.New("partitions.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/partitions.tmpl", "html/nav.tmpl")
+	partitionsTemplate, err := template.New("partitions.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/partitions.tmpl", "html/nav.tmpl", "html/modal.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse partitions template: %w", err)
 	}
@@ -407,7 +517,7 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		return nil, fmt.Errorf("failed to parse groups template: %w", err)
 	}
 
-	logsTemplate, err := template.New("logs.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/logs.tmpl", "html/nav.tmpl")
+	logsTemplate, err := template.New("logs.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/logs.tmpl", "html/nav.tmpl", "html/modal.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse logs template: %w", err)
 	}
@@ -445,6 +555,11 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	diagnosticsTemplate, err := template.New("diagnostics.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/diagnostics.tmpl", "html/nav.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse diagnostics template: %w", err)
+	}
+
+	consensusTemplate, err := template.New("consensus.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/consensus.tmpl", "html/nav.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse consensus template: %w", err)
 	}
 
 	segmentsTemplate, err := template.New("segments.tmpl").Funcs(funcMap).ParseFS(ui.HTMLFiles, "html/segments.tmpl", "html/nav.tmpl")
@@ -492,11 +607,16 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		skewTemplate:        skewTemplate,
 		searchTemplate:      searchTemplate,
 		diagnosticsTemplate: diagnosticsTemplate,
+		consensusTemplate:   consensusTemplate,
 		segmentsTemplate:    segmentsTemplate,
 		segmentViewTemplate: segmentViewTemplate,
 		cpuProfilesTemplate: cpuProfilesTemplate,
 		notebookTemplate:    notebookTemplate,
 		logsOnly:            logsOnly,
+		authToken:           authToken,
+		shutdownTimeout:     shutdownTimeout,
+		inactivityTimeout:   inactivityTimeout,
+		lastHeartbeat:       time.Now().Unix(),
 		currentVersion:      currentVersion,
 		latestVersion:       latestVersion,
 		updateAvailable:     latestVersion != "" && latestVersion != currentVersion,
@@ -542,6 +662,8 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/logs/context", server.apiLogContextHandler)
 	mux.HandleFunc("/api/logs/pin", server.apiPinLogHandler)
 	mux.HandleFunc("/api/logs/unpin", server.apiUnpinLogHandler)
+	mux.HandleFunc("/api/raft/timeline", server.apiRaftTimelineHandler)
+	mux.HandleFunc("/api/heartbeat", server.heartbeatHandler)
 	mux.HandleFunc("/api/full-logs-page", server.apiFullLogsPageHandler) // New handler for lazy loading logs page
 	mux.HandleFunc("/notebook", server.notebookHandler)
 	mux.HandleFunc("/api/notebook/note", server.apiUpdatePinNoteHandler)
@@ -554,6 +676,7 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/timeline/aggregated", server.apiTimelineAggregatedHandler)
 	mux.HandleFunc("/metrics", server.metricsHandler)
 	mux.HandleFunc("/system", server.systemHandler)
+	mux.HandleFunc("/consensus", server.consensusHandler)
 	mux.HandleFunc("/timeline", server.timelineHandler)
 	mux.HandleFunc("/skew", server.skewHandler)
 	mux.HandleFunc("/search", server.searchHandler)
@@ -568,12 +691,15 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/cpu/download", server.apiCpuDownloadHandler)
 
 	// Wrap the mux with middlewares
-	// Order: Gzip -> Security -> Mux
+	// Order: Auth -> Gzip -> Security -> Mux
 	var handler http.Handler = mux
 	handler = SecurityHeadersMiddleware(handler)
 	handler = GzipMiddleware(handler)
+	handler = server.AuthMiddleware(handler)
 
 	server.handler = handler
+
+	server.startTimeoutWatcher()
 
 	return server, nil
 }

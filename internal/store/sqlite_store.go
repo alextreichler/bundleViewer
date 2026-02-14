@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/alextreichler/bundleViewer/internal/analysis"
+	"github.com/alextreichler/bundleViewer/internal/logutil"
 	"github.com/alextreichler/bundleViewer/internal/models"
 	_ "modernc.org/sqlite"
 )
@@ -38,9 +40,12 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore,
 	pragmas := []string{
 		"PRAGMA journal_mode=OFF;",      // No rollback journal (fastest, risky)
 		"PRAGMA synchronous=OFF;",       // Don't wait for disk flush
+		"PRAGMA locking_mode=EXCLUSIVE;", // exclusive access for speed
+		"PRAGMA page_size=65536;",       // 64KB page size
 		"PRAGMA temp_store=MEMORY;",     // Temp tables in RAM
 		"PRAGMA cache_size=-500000;",    // ~500MB cache
 		"PRAGMA mmap_size=8000000000;",  // Memory map up to 8GB
+		"PRAGMA count_changes=OFF;",     // Don't count changes
 	}
 
 	for _, p := range pragmas {
@@ -523,7 +528,7 @@ func (s *SQLiteStore) GetK8sEventCountsByTime(bucketSize time.Duration) (map[tim
 }
 
 func (s *SQLiteStore) InsertLog(logEntry *models.LogEntry) error {
-	logEntry.Fingerprint = analysis.GenerateFingerprint(logEntry.Message)
+	logEntry.Fingerprint = logutil.GenerateFingerprint(logEntry.Message)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -563,7 +568,7 @@ func (s *SQLiteStore) BulkInsertLogs(logEntries []*models.LogEntry) error {
 	defer func() { _ = stmt.Close() }()
 
 	for _, logEntry := range logEntries {
-		logEntry.Fingerprint = analysis.GenerateFingerprint(logEntry.Message)
+		logEntry.Fingerprint = logutil.GenerateFingerprint(logEntry.Message)
 		var ts int64
 		if !logEntry.Timestamp.IsZero() {
 			ts = logEntry.Timestamp.UnixMicro()
@@ -666,12 +671,10 @@ func buildFTSQuery(input string) string {
 		"AND": true, "OR": true, "NOT": true, "(": true, ")": true,
 	}
 
+	// Only these fields are actually in the FTS table
 	allowedFields := map[string]bool{
-		"message":   true,
-		"raw":       true,
-		"node":      true,
-		"component": true,
-		"level":     true,
+		"message":       true,
+		"message_lower": true,
 	}
 
 	var tokens []string
@@ -716,35 +719,64 @@ func buildFTSQuery(input string) string {
 
 	// Process tokens
 	var processed []string
+	parenCount := 0
 	for _, token := range tokens {
 		upper := strings.ToUpper(token)
 		if operators[upper] {
-			processed = append(processed, upper)
+			if upper == "(" {
+				parenCount++
+				processed = append(processed, upper)
+			} else if upper == ")" {
+				if parenCount <= 0 {
+					continue // Skip unbalanced closing paren
+				}
+				// Avoid empty parentheses ()
+				if len(processed) > 0 && processed[len(processed)-1] == "(" {
+					processed = processed[:len(processed)-1]
+					parenCount--
+					continue
+				}
+				parenCount--
+				processed = append(processed, upper)
+			} else {
+				// Binary operators (AND, OR, NOT)
+				// Avoid consecutive operators or operator after (
+				if len(processed) > 0 {
+					last := processed[len(processed)-1]
+					if last == "(" || operators[last] {
+						continue 
+					}
+				} else {
+					// Allow starting with NOT so GetLogs can detect it,
+					// but skip other binary operators like AND, OR.
+					if upper != "NOT" && upper != "(" {
+						continue
+					}
+				}
+				processed = append(processed, upper)
+			}
 			continue
 		}
 
 		// Check for field:value syntax
-		// We look for the first colon
 		colonIdx := strings.Index(token, ":")
 		if colonIdx > 0 {
 			field := token[:colonIdx]
 			value := token[colonIdx+1:]
 			
-			// Check if valid field (case-insensitive match logic, but schema is lowercase)
-			// Assuming user types "Level:ERROR", we want to match "level"
-			if allowedFields[strings.ToLower(field)] {
-				// Handle value quoting
-				// If value is already quoted e.g. "foo bar", we strip quotes to re-escape safely
+			fLower := strings.ToLower(field)
+			if allowedFields[fLower] {
+				// Normalize to message_lower
+				if fLower == "message" {
+					fLower = "message_lower"
+				}
+				
 				if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") && len(value) >= 2 {
 					value = value[1 : len(value)-1]
 				}
 				
-				// Escape double quotes in value
 				safeValue := strings.ReplaceAll(value, "\"", "\"\"")
-				
-				// Reconstruct as field:"value"
-				// Note: FTS5 column filters are unquoted field names usually
-				processed = append(processed, fmt.Sprintf("%s:\"%s\"", strings.ToLower(field), safeValue))
+				processed = append(processed, fmt.Sprintf("%s:\"%s\"", fLower, safeValue))
 				continue
 			}
 		}
@@ -762,7 +794,181 @@ func buildFTSQuery(input string) string {
 		}
 	}
 
+	// Close unbalanced parentheses
+	for parenCount > 0 {
+		processed = append(processed, ")")
+		parenCount--
+	}
+
+	// Remove leading binary operators (AND, OR)
+	for len(processed) > 0 {
+		first := processed[0]
+		if first == "AND" || first == "OR" {
+			processed = processed[1:]
+		} else {
+			break
+		}
+	}
+
+	// Remove trailing operators
+	for len(processed) > 0 {
+		last := processed[len(processed)-1]
+		if last == "AND" || last == "OR" || last == "NOT" || last == "(" {
+			processed = processed[:len(processed)-1]
+		} else {
+			break
+		}
+	}
+
 	return strings.Join(processed, " ")
+}
+
+func (s *SQLiteStore) GetRaftEvents(ntp string) ([]models.RaftTimelineEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Use FTS to find logs related to this NTP and Raft patterns
+	// Patterns: "became the leader", "Stepping down", "error code: 10", "raft::errc::timeout"
+	searchQuery := fmt.Sprintf("\"%s\" AND (leader OR stepdown OR timeout OR term)", ntp)
+	ftsQuery := buildFTSQuery(searchQuery)
+
+	query := `
+		SELECT T1.timestamp, T1.node, T1.message 
+		FROM logs AS T1 
+		JOIN logs_fts AS T2 ON T1.id = T2.rowid 
+		WHERE T2.logs_fts MATCH ? 
+		ORDER BY T1.timestamp ASC`
+
+	rows, err := s.db.Query(query, ftsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []models.RaftTimelineEvent
+	
+	// Regex for term extraction and reason extraction
+	termRegex := regexp.MustCompile(`term (\d+)`)
+	reasonRegex := regexp.MustCompile(`(?:reasoning: |\[)([\w_]+)(?:\]\s+Stepping down|$)`)
+	ntpRegex := regexp.MustCompile(`([\w._-]+/[\w._-]+/\d+)`)
+
+	for rows.Next() {
+		var ts int64
+		var node, msg string
+		if err := rows.Scan(&ts, &node, &msg); err != nil {
+			continue
+		}
+
+		// Extract NTP if present
+		var ntpFound string
+		if matches := ntpRegex.FindStringSubmatch(msg); len(matches) > 1 {
+			ntpFound = matches[1]
+		} else {
+			ntpFound = ntp // Use the provided ntp if not found in message
+		}
+
+		event := models.RaftTimelineEvent{
+			Timestamp:   time.UnixMicro(ts).UTC(),
+			Node:        node,
+			NTP:         ntpFound,
+			Description: msg,
+		}
+
+		// Extract term if present
+		if matches := termRegex.FindStringSubmatch(msg); len(matches) > 1 {
+			event.Term, _ = strconv.Atoi(matches[1])
+		}
+
+		// Categorize event
+		lowerMsg := strings.ToLower(msg)
+		if strings.Contains(lowerMsg, "became the leader") {
+			event.Type = "Elected"
+		} else if strings.Contains(lowerMsg, "stepping down") {
+			event.Type = "Stepdown"
+			if matches := reasonRegex.FindStringSubmatch(msg); len(matches) > 1 {
+				event.Reason = matches[1]
+			}
+		} else if strings.Contains(lowerMsg, "timeout") || strings.Contains(lowerMsg, "error code: 10") {
+			event.Type = "Timeout"
+		} else {
+			// Skip logs that don't match our core interest even if FTS picked them up
+			continue
+		}
+
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (s *SQLiteStore) GetGlobalRaftEvents() ([]models.RaftTimelineEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Broad search for Raft and configuration changes across all NTPs
+	searchQuery := "(leader OR stepdown OR timeout OR term OR reconfiguration OR moving OR \"is down\")"
+	ftsQuery := buildFTSQuery(searchQuery)
+
+	query := `
+		SELECT T1.timestamp, T1.node, T1.message 
+		FROM logs AS T1 
+		JOIN logs_fts AS T2 ON T1.id = T2.rowid 
+		WHERE T2.logs_fts MATCH ? 
+		ORDER BY T1.timestamp DESC`
+
+	rows, err := s.db.Query(query, ftsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []models.RaftTimelineEvent
+	termRegex := regexp.MustCompile(`term (\d+)`)
+	reasonRegex := regexp.MustCompile(`(?:reasoning: |\[)([\w_]+)(?:\]\s+Stepping down|$)`)
+	ntpRegex := regexp.MustCompile(`([\w._-]+/[\w._-]+/\d+)`)
+
+	for rows.Next() {
+		var ts int64
+		var node, msg string
+		if err := rows.Scan(&ts, &node, &msg); err != nil {
+			continue
+		}
+
+		event := models.RaftTimelineEvent{
+			Timestamp:   time.UnixMicro(ts).UTC(),
+			Node:        node,
+			Description: msg,
+		}
+
+		if matches := termRegex.FindStringSubmatch(msg); len(matches) > 1 {
+			event.Term, _ = strconv.Atoi(matches[1])
+		}
+		if matches := ntpRegex.FindStringSubmatch(msg); len(matches) > 1 {
+			event.NTP = matches[1]
+		}
+
+		lowerMsg := strings.ToLower(msg)
+		if strings.Contains(lowerMsg, "became the leader") {
+			event.Type = "Elected"
+		} else if strings.Contains(lowerMsg, "stepping down") {
+			event.Type = "Stepdown"
+			if matches := reasonRegex.FindStringSubmatch(msg); len(matches) > 1 {
+				event.Reason = matches[1]
+			}
+		} else if strings.Contains(lowerMsg, "timeout") || strings.Contains(lowerMsg, "error code: 10") {
+			event.Type = "Timeout"
+		} else if strings.Contains(lowerMsg, "moving") || strings.Contains(lowerMsg, "reconfiguration") {
+			event.Type = "Move"
+		} else if strings.Contains(lowerMsg, "is down") {
+			event.Type = "Health"
+		} else {
+			continue
+		}
+
+		events = append(events, event)
+	}
+
+	return events, nil
 }
 
 func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int, error) {
@@ -781,11 +987,20 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 	ftsSearch := buildFTSQuery(strings.ToLower(filter.Search))
 	ftsIgnore := buildFTSQuery(strings.ToLower(filter.Ignore))
 
-	// If the search query starts with "NOT", treat it as an ignore filter
-	// This allows "NOT error" to work as expected (implicitly "everything NOT error")
-	// because FTS5 "NOT" is a binary operator and cannot start a query.
-	if strings.HasPrefix(ftsSearch, "NOT ") && ftsIgnore == "" {
-		ftsIgnore = strings.TrimPrefix(ftsSearch, "NOT ")
+	// If the ignore query starts with "NOT", strip it. It's an ignore filter already.
+	if strings.HasPrefix(ftsIgnore, "NOT ") {
+		ftsIgnore = strings.TrimPrefix(ftsIgnore, "NOT ")
+	}
+
+	// If the search query starts with "NOT", merge it into the ignore filter.
+	// FTS5 doesn't support a leading NOT in a MATCH expression.
+	if strings.HasPrefix(ftsSearch, "NOT ") {
+		ignorePart := strings.TrimPrefix(ftsSearch, "NOT ")
+		if ftsIgnore != "" {
+			ftsIgnore = fmt.Sprintf("(%s) OR (%s)", ignorePart, ftsIgnore)
+		} else {
+			ftsIgnore = ignorePart
+		}
 		ftsSearch = ""
 	}
 
@@ -947,7 +1162,7 @@ func (s *SQLiteStore) GetLogs(filter *models.LogFilter) ([]*models.LogEntry, int
 		if ts != 0 {
 			logEntry.Timestamp = time.UnixMicro(ts).UTC()
 		}
-		logEntry.Insight = analysis.GetInsight(logEntry.Message)
+		logEntry.Insight = logutil.GetInsight(logEntry.Message)
 		logEntries = append(logEntries, &logEntry)
 	}
 
@@ -1081,7 +1296,7 @@ func (s *SQLiteStore) GetLogPatterns() ([]models.LogPattern, int, error) {
 			p.LastSeen = time.UnixMicro(lastSeen).UTC()
 		}
 		p.SampleEntry = models.LogEntry{Message: sampleMessage}
-		p.Insight = analysis.GetInsight(sampleMessage)
+		p.Insight = logutil.GetInsight(sampleMessage)
 		patterns = append(patterns, p)
 		totalLogs += p.Count
 	}

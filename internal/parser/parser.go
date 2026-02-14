@@ -329,63 +329,95 @@ func tryParseCSVLog(line string) (ts, level, comp, msg string, ok bool) {
 	return ts, level, comp, msg, true
 }
 
+var (
+	entryPool = sync.Pool{
+		New: func() interface{} {
+			return &models.LogEntry{}
+		},
+	}
+	batchPool = sync.Pool{
+		New: func() interface{} {
+			return make([]*models.LogEntry, 0, 10000)
+		},
+	}
+)
+
+// LogParser handles the state for parsing log files.
+type LogParser struct {
+	store      store.Store
+	tracker    *models.ProgressTracker
+	batchSize  int
+	layout     string
+	sem        chan struct{}
+}
+
+func NewLogParser(s store.Store, p *models.ProgressTracker) *LogParser {
+	return &LogParser{
+		store:     s,
+		tracker:   p,
+		batchSize: 10000,
+		layout:    "2006-01-02 15:04:05,000",
+		sem:       make(chan struct{}, runtime.NumCPU()),
+	}
+}
+
+func (lp *LogParser) getEntry() *models.LogEntry {
+	entry := entryPool.Get().(*models.LogEntry)
+	entry.Reset()
+	return entry
+}
+
+func (lp *LogParser) getBatch() []*models.LogEntry {
+	return batchPool.Get().([]*models.LogEntry)[:0]
+}
+
+func (lp *LogParser) recycleBatch(batch []*models.LogEntry) {
+	for _, entry := range batch {
+		entryPool.Put(entry)
+	}
+	batchPool.Put(batch)
+}
+
 // ParseLogs reads and parses all redpanda log files and stores them in the provided store.
 func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTracker) error {
+	lp := NewLogParser(s, p)
+	return lp.Run(bundlePath, logsOnly)
+}
+
+func (lp *LogParser) Run(bundlePath string, logsOnly bool) error {
 	var allLogFiles []string
 
 	if logsOnly {
-		// In Logs Only mode, assume any file in the root is potentially a log file
 		entries, err := os.ReadDir(bundlePath)
 		if err == nil {
 			for _, entry := range entries {
-				if !entry.IsDir() {
-					// Skip likely non-log system files if obvious, but user requested "any file"
-					// We'll trust the user but maybe skip dotfiles like .DS_Store
-					if strings.HasPrefix(entry.Name(), ".") {
-						continue
-					}
+				if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
 					allLogFiles = append(allLogFiles, filepath.Join(bundlePath, entry.Name()))
 				}
 			}
 		}
 	} else {
-		// In Full Bundle mode, be strict to avoid parsing config/status text files as logs
 		mainLogFile := filepath.Join(bundlePath, "redpanda.log")
 		if _, err := os.Stat(mainLogFile); err == nil {
 			allLogFiles = append(allLogFiles, mainLogFile)
 		}
 	}
 
-	// 2. Recursively find *.log and *.txt files in logs/
-	dirsToWalk := []string{
-		filepath.Join(bundlePath, "logs"),
-	}
-
+	dirsToWalk := []string{filepath.Join(bundlePath, "logs")}
 	for _, dir := range dirsToWalk {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue // Skip if directory doesn't exist
-		}
-
-		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				slog.Error("Error walking directory", "path", path, "error", err)
-				return nil // Don't stop the walk on error for one file
-			}
-			if d.IsDir() {
-				return nil // Skip directories
-			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if ext == ".log" || ext == ".txt" || ext == ".csv" {
-				allLogFiles = append(allLogFiles, path)
-			}
-			return nil
-		})
-		if err != nil {
-			slog.Error("Error during filepath.WalkDir", "path", dir, "error", err)
+		if _, err := os.Stat(dir); err == nil {
+			_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					ext := strings.ToLower(filepath.Ext(path))
+					if ext == ".log" || ext == ".txt" || ext == ".csv" {
+						allLogFiles = append(allLogFiles, path)
+					}
+				}
+				return nil
+			})
 		}
 	}
 
-	// Use a map to store unique file paths and avoid processing the same file multiple times
 	uniqueFiles := make(map[string]struct{})
 	var distinctFiles []string
 	for _, file := range allLogFiles {
@@ -395,21 +427,17 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 		}
 	}
 
-	// Channel for sending batches to the DB writer
-	// Buffer size allow parsers to proceed while DB is writing
 	logBatchChan := make(chan []*models.LogEntry, 20)
-	
-	// Error channel to collect errors from goroutines
 	errChan := make(chan error, len(distinctFiles)+1)
-
-	var parserWg sync.WaitGroup
-	var writerWg sync.WaitGroup
+	var parserWg, writerWg sync.WaitGroup
 
 	slog.Info("Starting log parsing", "file_count", len(distinctFiles))
+	if lp.tracker != nil {
+		lp.tracker.AddTotal(len(distinctFiles))
+	}
 
-	// Heartbeat for UI liveliness
 	heartbeatDone := make(chan struct{})
-	if p != nil {
+	if lp.tracker != nil {
 		go func() {
 			ticker := time.NewTicker(20 * time.Second)
 			defer ticker.Stop()
@@ -418,314 +446,269 @@ func ParseLogs(bundlePath string, s store.Store, logsOnly bool, p *models.Progre
 				case <-heartbeatDone:
 					return
 				case <-ticker.C:
-					p.SetStatus("Still processing logs... (not stuck)")
+					lp.tracker.SetStatus("Still processing logs... (not stuck)")
 				}
 			}
 		}()
 	}
 
-	// Start DB Writer Goroutine
 	writerWg.Add(1)
 	go func() {
 		defer writerWg.Done()
 		for batch := range logBatchChan {
-			if err := s.BulkInsertLogs(batch); err != nil {
+			if err := lp.store.BulkInsertLogs(batch); err != nil {
 				slog.Error("Error bulk inserting logs", "error", err)
-				// Don't block if errChan is full
 				select {
 				case errChan <- fmt.Errorf("db write error: %w", err):
 				default:
-					slog.Warn("Error channel full, dropping error", "err", err)
 				}
-				return // Stop writing on error to avoid deadlock
+				lp.recycleBatch(batch) // Still recycle even on error
+				return
 			}
+			lp.recycleBatch(batch) // RECYCLE
 		}
 	}()
 
-	// Removed slow Regex compilations
-	layout := "2006-01-02 15:04:05,000"
-
-	const batchSize = 10000 // Increased batch size for better throughput
-
-	// Limit concurrent file parsing to number of CPUs to avoid OOM
-	sem := make(chan struct{}, runtime.NumCPU())
-
 	for _, file := range distinctFiles {
 		parserWg.Add(1)
-		// Acquire semaphore
-		sem <- struct{}{}
+		lp.sem <- struct{}{}
 		go func(filePath string) {
 			defer parserWg.Done()
-			defer func() { <-sem }() // Release semaphore
-			if p != nil {
-				p.SetStatus(fmt.Sprintf("Parsing logs: %s", filepath.Base(filePath)))
-			}
-			slog.Info("Parsing file", "path", filePath)
-
-			nodeName := ""
-			baseName := filepath.Base(filePath)
-			if baseName == "redpanda.log" {
-				nodeName = "redpanda"
-			} else {
-				nodeName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
-			}
-
-			f, err := os.Open(filePath)
-			if err != nil {
-				slog.Error("Error opening log file", "path", filePath, "error", err)
-				errChan <- fmt.Errorf("failed to open %s: %w", filePath, err)
-				return
-			}
-			defer func() { _ = f.Close() }()
-
-			// Detect UTF-16LE
-			var r io.Reader = f
-			bom := make([]byte, 2)
-			if n, err := f.Read(bom); err == nil && n == 2 {
-				if bom[0] == 0xff && bom[1] == 0xfe {
-					r = newUTF16LEReader(f)
-				} else {
-					f.Seek(0, io.SeekStart)
-				}
-			} else {
-				f.Seek(0, io.SeekStart)
-			}
-
-			// Pre-allocate batch slice to reduce re-allocations
-			batch := make([]*models.LogEntry, 0, batchSize)
-			
-			scanner := bufio.NewScanner(r)
-			const maxCapacity = 5 * 1024 * 1024 // 5MB
-			buf := make([]byte, maxCapacity)
-			scanner.Buffer(buf, maxCapacity)
-
-			var currentEntry *models.LogEntry
-			lineNumber := 0
-
-			for scanner.Scan() {
-				lineNumber++
-				if p != nil && lineNumber%20000 == 0 {
-					p.SetStatus(fmt.Sprintf("Parsing logs: %s (%d lines processed)", filepath.Base(filePath), lineNumber))
-				}
-				line := scanner.Text()
-
-				if len(line) > 50000 {
-					continue // Skip massive lines
-				}
-
-				// Try matching with regex - REPLACED with Fast String Parsing
-
-				isCSV := strings.HasSuffix(filePath, ".csv")
-
-				// 0. CSV PATH
-				if isCSV {
-					cTs, cLevel, cComp, cMsg, cOk := tryParseCSVLog(line)
-					if cOk {
-						if currentEntry != nil {
-							batch = append(batch, currentEntry)
-							if len(batch) >= batchSize {
-								logBatchChan <- batch
-								batch = make([]*models.LogEntry, 0, batchSize)
-							}
-						}
-
-						// Try parsing timestamp formats
-						timestamp, err := time.Parse(time.RFC3339, cTs)
-						if err != nil {
-							timestamp, err = time.Parse(time.RFC3339Nano, cTs)
-						}
-						if err != nil {
-							timestamp, _ = time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", cTs) // Google Cloud format sometimes
-						}
-
-						currentEntry = &models.LogEntry{
-							Timestamp:  timestamp,
-							Level:      cLevel,
-							Node:       nodeName,
-							Component:  cComp,
-							Message:    cMsg,
-							Raw:        line,
-							LineNumber: lineNumber,
-							FilePath:   filePath,
-						}
-						continue
-					}
-				}
-
-				// 1. FAST PATH: Try parsing standard Redpanda log format without regex
-				if !isCSV {
-					fLevel, fTs, fShard, fComp, fMsg, ok := tryParseStandardLog(line)
-					if ok {
-						if currentEntry != nil {
-							batch = append(batch, currentEntry)
-							if len(batch) >= batchSize {
-								logBatchChan <- batch
-								batch = make([]*models.LogEntry, 0, batchSize)
-							}
-						}
-
-						// Normalize timestamp
-						fTs = strings.Replace(fTs, ".", ",", 1)
-						if len(fTs) > 23 {
-							fTs = fTs[:23]
-						} else if len(fTs) == 19 {
-							fTs += ",000"
-						} else if len(fTs) < 23 && len(fTs) > 19 {
-							// Pad milliseconds if they are less than 3 digits
-							fTs += strings.Repeat("0", 23-len(fTs))
-						}
-						timestamp, _ := time.Parse(layout, fTs)
-
-						// Clean up shard info
-						if idx := strings.Index(fShard, ":"); idx != -1 {
-							fShard = fShard[:idx]
-						}
-
-						currentEntry = &models.LogEntry{
-							Timestamp:  timestamp,
-							Level:      fLevel,
-							Node:       nodeName,
-							Shard:      fShard,
-							Component:  fComp,
-							Message:    fMsg,
-							Raw:        line,
-							LineNumber: lineNumber,
-							FilePath:   filePath,
-						}
-						continue
-					}
-				}
-
-				// 2. K8S PATH: Try parsing K8s/JSON logs without regex
-				if !isCSV {
-					kTs, kLevel, kComp, kMsg, kOk := tryParseK8sLog(line)
-					if kOk {
-						if currentEntry != nil {
-							batch = append(batch, currentEntry)
-							if len(batch) >= batchSize {
-								logBatchChan <- batch
-								batch = make([]*models.LogEntry, 0, batchSize)
-							}
-						}
-						
-						timestamp, _ := time.Parse(time.RFC3339, kTs)
-
-						currentEntry = &models.LogEntry{
-							Timestamp:  timestamp,
-							Level:      kLevel,
-							Node:       nodeName,
-							Component:  kComp,
-							Message:    kMsg,
-							Raw:        line,
-							LineNumber: lineNumber,
-							FilePath:   filePath,
-						}
-						continue
-					}
-				}
-
-				// 3. JSON Fallback
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
-					var jsonLog map[string]interface{}
-					if json.Unmarshal([]byte(trimmed), &jsonLog) == nil {
-						lvl, _ := jsonLog["level"].(string)
-						if lvl == "" { lvl = "INFO" }
-						lvl = strings.ToUpper(lvl)
-
-						tsStr, _ := jsonLog["ts"].(string)
-						if tsStr == "" { tsStr, _ = jsonLog["timestamp"].(string) }
-						ts, err := time.Parse(time.RFC3339, tsStr)
-						if err != nil {
-							ts, _ = time.Parse("2006-01-02T15:04:05.999Z07:00", tsStr)
-						}
-
-						msg, _ := jsonLog["msg"].(string)
-						if msg == "" { msg, _ = jsonLog["message"].(string) }
-						if msg == "" { msg = trimmed }
-
-						comp, _ := jsonLog["logger"].(string)
-						if comp == "" { comp, _ = jsonLog["component"].(string) }
-						if comp == "" { comp = "sidecar" }
-
-						if currentEntry != nil {
-							batch = append(batch, currentEntry)
-							if len(batch) >= batchSize {
-								logBatchChan <- batch
-								batch = make([]*models.LogEntry, 0, batchSize)
-							}
-						}
-						
-						currentEntry = &models.LogEntry{
-							Timestamp:  ts,
-							Level:      lvl,
-							Node:       nodeName,
-							Component:  comp,
-							Message:    msg,
-							Raw:        line,
-							LineNumber: lineNumber,
-							FilePath:   filePath,
-						}
-						continue
-					}
-				}
-
-				// 4. Multiline Handling
-				if currentEntry != nil {
-					currentEntry.Message += "\n" + line
-					currentEntry.Raw += "\n" + line
-				} else {
-					// Fallback for completely unknown lines (assume STDOUT INFO)
-					currentEntry = &models.LogEntry{
-						Timestamp:  time.Time{},
-						Level:      "INFO",
-						Node:       nodeName,
-						Component:  "stdout",
-						Message:    line,
-						Raw:        line,
-						LineNumber: lineNumber,
-						FilePath:   filePath,
-					}
-				}
-			}
-
-			if currentEntry != nil {
-				batch = append(batch, currentEntry)
-			}
-
-			if len(batch) > 0 {
-				logBatchChan <- batch
-			}
-
-			if err := scanner.Err(); err != nil {
-				slog.Error("Error scanning log file", "path", filePath, "error", err)
-				errChan <- fmt.Errorf("error reading %s: %w", filePath, err)
+			defer func() { <-lp.sem }()
+			if err := lp.parseFile(filePath, logBatchChan); err != nil {
+				errChan <- err
 			}
 		}(file)
 	}
 
-	// Wait for all parsers to finish
 	parserWg.Wait()
-	// Then close the channel to signal DB writer to stop
 	close(logBatchChan)
-	// Wait for DB writer to finish
 	writerWg.Wait()
-	
 	close(errChan)
-	
-	// Stop heartbeat
-	if p != nil {
+	if lp.tracker != nil {
 		close(heartbeatDone)
 	}
 
-	// Return first error if any
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+func (lp *LogParser) parseFile(filePath string, batchChan chan<- []*models.LogEntry) error {
+	if lp.tracker != nil {
+		lp.tracker.Update(1, fmt.Sprintf("Parsing logs: %s", filepath.Base(filePath)))
+	}
+	slog.Info("Parsing file", "path", filePath)
+
+	nodeName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	if filepath.Base(filePath) == "redpanda.log" {
+		nodeName = "redpanda"
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", filePath, err)
+	}
+	defer f.Close()
+
+	var r io.Reader = f
+	bom := make([]byte, 2)
+	if n, err := f.Read(bom); err == nil && n == 2 {
+		if bom[0] == 0xff && bom[1] == 0xfe {
+			r = newUTF16LEReader(f)
+		} else {
+			f.Seek(0, io.SeekStart)
+		}
+	} else {
+		f.Seek(0, io.SeekStart)
+	}
+
+	batch := lp.getBatch()
+	scanner := bufio.NewScanner(r)
+	buf := make([]byte, 5*1024*1024)
+	scanner.Buffer(buf, 5*1024*1024)
+
+	var currentEntry *models.LogEntry
+	lineNumber := 0
+	isCSV := strings.HasSuffix(filePath, ".csv")
+
+	for scanner.Scan() {
+		lineNumber++
+		if lp.tracker != nil && lineNumber%50000 == 0 {
+			lp.tracker.SetStatus(fmt.Sprintf("Parsing logs: %s (%d lines)", filepath.Base(filePath), lineNumber))
+		}
+		line := scanner.Text()
+		if len(line) > 50000 || len(line) == 0 {
+			continue
+		}
+
+		var entry *models.LogEntry
+		var ok bool
+
+		if isCSV {
+			entry, ok = lp.parseCSVLine(line, nodeName, filePath, lineNumber)
+		} else {
+			// Standard Redpanda
+			entry, ok = lp.parseStandardLine(line, nodeName, filePath, lineNumber)
+			if !ok {
+				// K8s/JSON
+				entry, ok = lp.parseK8sLine(line, nodeName, filePath, lineNumber)
+			}
+			if !ok {
+				// Generic JSON
+				entry, ok = lp.parseJSONLine(line, nodeName, filePath, lineNumber)
+			}
+		}
+
+		if ok {
+			if currentEntry != nil {
+				batch = append(batch, currentEntry)
+				if len(batch) >= lp.batchSize {
+					batchChan <- batch
+					batch = lp.getBatch()
+				}
+			}
+			currentEntry = entry
+		} else if currentEntry != nil {
+			// Multiline append
+			currentEntry.Message += "\n" + line
+			currentEntry.Raw += "\n" + line
+		} else {
+			// Fallback for first line if nothing matches
+			currentEntry = lp.getEntry()
+			currentEntry.Level = "INFO"
+			currentEntry.Node = nodeName
+			currentEntry.Component = "stdout"
+			currentEntry.Message = line
+			currentEntry.Raw = line
+			currentEntry.LineNumber = lineNumber
+			currentEntry.FilePath = filePath
+		}
+	}
+
+	if currentEntry != nil {
+		batch = append(batch, currentEntry)
+	}
+	if len(batch) > 0 {
+		batchChan <- batch
+	}
+	return scanner.Err()
+}
+
+func (lp *LogParser) parseCSVLine(line, node, file string, lineNum int) (*models.LogEntry, bool) {
+	cTs, cLevel, cComp, cMsg, cOk := tryParseCSVLog(line)
+	if !cOk {
+		return nil, false
+	}
+	timestamp, err := time.Parse(time.RFC3339, cTs)
+	if err != nil {
+		timestamp, err = time.Parse(time.RFC3339Nano, cTs)
+	}
+	if err != nil {
+		timestamp, _ = time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", cTs)
+	}
+	
+	entry := lp.getEntry()
+	entry.Timestamp = timestamp
+	entry.Level = cLevel
+	entry.Node = node
+	entry.Component = cComp
+	entry.Message = cMsg
+	entry.Raw = line
+	entry.LineNumber = lineNum
+	entry.FilePath = file
+	return entry, true
+}
+
+func (lp *LogParser) parseStandardLine(line, node, file string, lineNum int) (*models.LogEntry, bool) {
+	fLevel, fTs, fShard, fComp, fMsg, ok := tryParseStandardLog(line)
+	if !ok {
+		return nil, false
+	}
+	fTs = strings.Replace(fTs, ".", ",", 1)
+	if len(fTs) > 23 {
+		fTs = fTs[:23]
+	} else if len(fTs) == 19 {
+		fTs += ",000"
+	} else if len(fTs) < 23 && len(fTs) > 19 {
+		fTs += strings.Repeat("0", 23-len(fTs))
+	}
+	timestamp, _ := time.Parse(lp.layout, fTs)
+	if idx := strings.Index(fShard, ":"); idx != -1 {
+		fShard = fShard[:idx]
+	}
+	
+	entry := lp.getEntry()
+	entry.Timestamp = timestamp
+	entry.Level = fLevel
+	entry.Node = node
+	entry.Shard = fShard
+	entry.Component = fComp
+	entry.Message = fMsg
+	entry.Raw = line
+	entry.LineNumber = lineNum
+	entry.FilePath = file
+	return entry, true
+}
+
+func (lp *LogParser) parseK8sLine(line, node, file string, lineNum int) (*models.LogEntry, bool) {
+	kTs, kLevel, kComp, kMsg, kOk := tryParseK8sLog(line)
+	if !kOk {
+		return nil, false
+	}
+	timestamp, _ := time.Parse(time.RFC3339, kTs)
+	
+	entry := lp.getEntry()
+	entry.Timestamp = timestamp
+	entry.Level = kLevel
+	entry.Node = node
+	entry.Component = kComp
+	entry.Message = kMsg
+	entry.Raw = line
+	entry.LineNumber = lineNum
+	entry.FilePath = file
+	return entry, true
+}
+
+func (lp *LogParser) parseJSONLine(line, node, file string, lineNum int) (*models.LogEntry, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		return nil, false
+	}
+	var jsonLog map[string]interface{}
+	if json.Unmarshal([]byte(trimmed), &jsonLog) != nil {
+		return nil, false
+	}
+	lvl, _ := jsonLog["level"].(string)
+	if lvl == "" { lvl = "INFO" }
+	lvl = strings.ToUpper(lvl)
+
+	tsStr, _ := jsonLog["ts"].(string)
+	if tsStr == "" { tsStr, _ = jsonLog["timestamp"].(string) }
+	ts, err := time.Parse(time.RFC3339, tsStr)
+	if err != nil {
+		ts, _ = time.Parse("2006-01-02T15:04:05.999Z07:00", tsStr)
+	}
+	msg, _ := jsonLog["msg"].(string)
+	if msg == "" { msg, _ = jsonLog["message"].(string) }
+	if msg == "" { msg = trimmed }
+	comp, _ := jsonLog["logger"].(string)
+	if comp == "" { comp, _ = jsonLog["component"].(string) }
+	if comp == "" { comp = "sidecar" }
+
+	entry := lp.getEntry()
+	entry.Timestamp = ts
+	entry.Level = lvl
+	entry.Node = node
+	entry.Component = comp
+	entry.Message = msg
+	entry.Raw = line
+	entry.LineNumber = lineNum
+	entry.FilePath = file
+	return entry, true
 }
 
 // ParseDuOutput reads and parses the du.txt file.
@@ -1552,10 +1535,6 @@ func ParsePrometheusMetrics(filePath string, allowedMetrics map[string]struct{},
 	var batch []*models.PrometheusMetric
 	const batchSize = 5000 // Increased batch size for better throughput
 	
-	// Add GC control variables
-	var processedBytes int64
-	const gcThreshold = 50 * 1024 * 1024 // 50MB
-
 	scanner := bufio.NewScanner(file)
 
 	// Buffer for scanner to handle potentially long lines, though metrics are usually short
@@ -1565,12 +1544,6 @@ func ParsePrometheusMetrics(filePath string, allowedMetrics map[string]struct{},
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
-		processedBytes += int64(len(line))
-		if processedBytes > gcThreshold {
-			runtime.GC()
-			processedBytes = 0
-		}
 		
 		// Skip comments and empty lines
 		if len(line) == 0 || line[0] == '#' {

@@ -30,11 +30,12 @@
 
     <div id="loading-overlay" style="display: none;">
 		<div id="loading-box">
-			<h2 id="loading-title">Initializing...</h2>
-			<div id="progress-container">
-				<div id="progress-bar">0%</div>
+            <div id="loading-spinner"></div>
+			<h2 id="loading-title" style="margin-top: 1rem;">Initializing Analysis...</h2>
+			<div id="progress-container" style="margin-top: 1rem; background: var(--border-color); height: 12px; border-radius: 6px; overflow: hidden;">
+				<div id="progress-bar" style="width: 0%; height: 100%; background: var(--primary-color); display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold; transition: width 0.3s;">0%</div>
 			</div>
-            <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem;">Parsing bundle files...</p>
+            <p id="progress-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem; text-align: center;">Parsing bundle files...</p>
 		</div>
 	</div>
 
@@ -89,7 +90,7 @@
             overlay.style.display = 'flex';
             
             const progressBar = document.getElementById('progress-bar');
-            const statusText = document.getElementById('loading-status');
+            const statusText = document.getElementById('progress-status');
             const eventSource = new EventSource('/api/load-progress');
 
             eventSource.onmessage = function(event) {
@@ -97,11 +98,21 @@
                 const progress = data.progress;
                 const status = data.status;
                 const finished = data.finished;
+                const eta = data.eta;
 
                 progressBar.style.width = progress + '%';
                 progressBar.textContent = progress + '%';
+                
+                let displayStatus = status;
+                if (eta > 0) {
+                    const mins = Math.floor(eta / 60);
+                    const secs = eta % 60;
+                    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                    displayStatus += ` (ETA: ${timeStr})`;
+                }
+                
                 if (status) {
-                    statusText.textContent = status;
+                    statusText.textContent = displayStatus;
                 }
 
                 if (finished) {

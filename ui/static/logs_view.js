@@ -86,23 +86,6 @@ if (!window.logsViewInitialized) {
                 window.location.href = '/logs/analysis';
             });
         }
-
-        // Modal interactions
-        window.addEventListener('click', function(event) {
-            const modal = document.getElementById('log-context-modal');
-            if (modal && event.target === modal) {
-                modal.style.display = 'none';
-            }
-        });
-
-        window.addEventListener('keydown', function(event) {
-            if (event.key === 'Escape') {
-                const modal = document.getElementById('log-context-modal');
-                if (modal && modal.style.display === 'block') {
-                    modal.style.display = 'none';
-                }
-            }
-        });
     };
 
     window.estimateRowHeight = function() {
@@ -308,6 +291,7 @@ if (!window.logsViewInitialized) {
                     <div style="display: flex; gap: 5px; align-items: center;">
                         <button class="${pinBtnClass}" onclick="togglePin(${i})" title="${log.isPinned ? 'Unpin' : 'Pin to Notebook'}">${pinBtnText}</button>
                         <button onclick="showLogContext('${log.filePath}', ${log.lineNumber})" style="font-size: 0.8em;">Context</button>
+                        <a href="/metrics?t=${log.timestamp}" class="button" style="font-size: 0.8em; padding: 2px 6px; background-color: var(--primary-color);">Metrics</a>
                         ${actionBtn}
                     </div>
                 </td>
@@ -462,11 +446,6 @@ async function showLogContext(filePath, lineNumber) {
     } catch (error) {
         contextBody.textContent = `Error loading log context: ${error.message}`;
     }
-}
-
-function closeLogContext() {
-    const modal = document.getElementById('log-context-modal');
-    if (modal) modal.style.display = 'none';
 }
 
 async function togglePin(index) {

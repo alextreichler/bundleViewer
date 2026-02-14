@@ -775,7 +775,81 @@ func ParseIP(bundlePath string) ([]models.NetworkInterface, error) {
 	return interfaces, nil
 }
 
-// ParseSS parses ss.txt for relevant network connections
+// ParseLSBLK parses utils/lsblk.txt
+func ParseLSBLK(bundlePath string) ([]models.BlockDevice, error) {
+	filePath := filepath.Join(bundlePath, "utils", "lsblk.txt")
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	var devices []models.BlockDevice
+	scanner := bufio.NewScanner(file)
+
+	// Check if it's JSON (sometimes captured with lsblk -J)
+	firstLine := ""
+	if scanner.Scan() {
+		firstLine = strings.TrimSpace(scanner.Text())
+	}
+	if strings.HasPrefix(firstLine, "{") {
+		// Try parsing as JSON
+		var raw struct {
+			BlockDevices []models.BlockDevice `json:"blockdevices"`
+		}
+		// Need to read the rest of the file
+		var fullContent strings.Builder
+		fullContent.WriteString(firstLine)
+		for scanner.Scan() {
+			fullContent.WriteString(scanner.Text())
+		}
+		if err := json.Unmarshal([]byte(fullContent.String()), &raw); err == nil {
+			return raw.BlockDevices, nil
+		}
+	}
+
+	// Fallback: Parse as tree/table
+	// NAME  KNAME  TYPE  SIZE  MOUNTPOINT  MODEL  SCHEDULER  RO
+	// sda   sda    disk  20G   /           ...    mq-deadline 0
+	
+	// We need to handle the tree structure (└─, ├─)
+	// For now, let's do a simple flat parse and try to detect parent/child by indentation
+	
+	// Re-open/reset scanner if needed, or just process what we have
+	// Since we already scanned firstLine, we need to process it
+	
+	line := firstLine
+	for {
+		if line != "" && !strings.HasPrefix(line, "NAME") {
+			trimmed := strings.TrimLeft(line, " |-└─├─")
+			fields := strings.Fields(trimmed)
+			if len(fields) >= 4 {
+				dev := models.BlockDevice{
+					Name:  fields[0],
+					Type:  fields[2],
+					Size:  fields[3],
+				}
+				// Try to find mountpoint if present
+				// This is heuristic because columns vary
+				for _, f := range fields {
+					if strings.HasPrefix(f, "/") {
+						dev.MountPoint = f
+						break
+					}
+				}
+				devices = append(devices, dev)
+			}
+		}
+		if !scanner.Scan() {
+			break
+		}
+		line = scanner.Text()
+	}
+
+	return devices, nil
+}
+
+// ParseSS parses ss.txt for relevant network connections, including TCP metrics
 func ParseSS(bundlePath string) ([]models.NetworkConnection, error) {
 	filePath := filepath.Join(bundlePath, "utils", "ss.txt")
 	file, err := os.Open(filePath)
@@ -788,47 +862,114 @@ func ParseSS(bundlePath string) ([]models.NetworkConnection, error) {
 	scanner := bufio.NewScanner(file)
 
 	// Skip header
-	// Netid  State      Recv-Q Send-Q Local Address:Port                 Peer Address:Port
-	scanner.Scan()
+	if !scanner.Scan() {
+		return nil, nil
+	}
+
+	var currentConn *models.NetworkConnection
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		
+		// If line starts with whitespace, it's likely a continuation of the previous connection
+		if (strings.HasPrefix(line, "\t") || strings.HasPrefix(line, " ")) && currentConn != nil {
+			parseTCPInfo(line, currentConn)
+			continue
+		}
+
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			continue
 		}
 
+		// New connection
 		netid := fields[0]
-
-		// Filter: We care mostly about TCP and UDP
-		if netid != "tcp" && netid != "udp" {
-			continue
+		if netid != "tcp" && netid != "udp" && !strings.HasPrefix(netid, "ESTAB") {
+			// Some ss versions don't show Netid as first column if filtered
+			// If it looks like a state, assume TCP
+			if isState(netid) {
+				netid = "tcp"
+			} else {
+				continue
+			}
 		}
 
-		state := fields[1]
-		recvQ := fields[2]
-		sendQ := fields[3]
-		local := fields[4]
-		peer := ""
-		if len(fields) > 5 {
-			peer = fields[5]
+		// Save previous
+		if currentConn != nil {
+			connections = append(connections, *currentConn)
 		}
 
-		// Further filtering:
-		// Hide standard loopback unless specifically asked?
-		// Actually loopback 127.0.0.1:9644 is common for admin.
-		// Let's keep everything but maybe emphasize external IPs in UI.
+		// Handle cases where Netid is missing
+		offset := 0
+		if fields[0] == "tcp" || fields[0] == "udp" {
+			offset = 1
+		}
 
-		connections = append(connections, models.NetworkConnection{
+		currentConn = &models.NetworkConnection{
 			Netid:     netid,
-			State:     state,
-			RecvQ:     recvQ,
-			SendQ:     sendQ,
-			LocalAddr: local,
-			PeerAddr:  peer,
-		})
+			State:     fields[0+offset],
+			RecvQ:     fields[1+offset],
+			SendQ:     fields[2+offset],
+			LocalAddr: fields[3+offset],
+			PeerAddr:  fields[4+offset],
+		}
 	}
+	
+	if currentConn != nil {
+		connections = append(connections, *currentConn)
+	}
+
 	return connections, nil
+}
+
+func isState(s string) bool {
+	states := []string{"ESTAB", "LISTEN", "TIME-WAIT", "CLOSE-WAIT", "FIN-WAIT-1", "FIN-WAIT-2", "SYN-SENT", "SYN-RECV"}
+	for _, st := range states {
+		if s == st {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTCPInfo(line string, conn *models.NetworkConnection) {
+	if conn.TCPInfo == nil {
+		conn.TCPInfo = &models.TCPInfo{}
+	}
+
+	// Look for users:(...)
+	if idx := strings.Index(line, "users:(("); idx != -1 {
+		endIdx := strings.Index(line[idx:], "))")
+		if endIdx != -1 {
+			conn.Process = line[idx+7 : idx+endIdx]
+		}
+	}
+
+	// Parse metrics: retrans:0/1 rto:204 cwnd:10 rtt:0.01/0.02
+	fields := strings.Fields(line)
+	for _, f := range fields {
+		if strings.HasPrefix(f, "retrans:") {
+			parts := strings.Split(strings.TrimPrefix(f, "retrans:"), "/")
+			if len(parts) >= 2 {
+				conn.TCPInfo.Retrans, _ = strconv.Atoi(parts[0])
+				conn.TCPInfo.RetransTotal, _ = strconv.Atoi(parts[1])
+			}
+		} else if strings.HasPrefix(f, "rto:") {
+			conn.TCPInfo.RTO, _ = strconv.ParseFloat(strings.TrimPrefix(f, "rto:"), 64)
+		} else if strings.HasPrefix(f, "cwnd:") {
+			conn.TCPInfo.Cwnd, _ = strconv.Atoi(strings.TrimPrefix(f, "cwnd:"))
+		} else if strings.HasPrefix(f, "ssthresh:") {
+			conn.TCPInfo.Ssthresh, _ = strconv.Atoi(strings.TrimPrefix(f, "ssthresh:"))
+		} else if strings.HasPrefix(f, "rtt:") {
+			parts := strings.Split(strings.TrimPrefix(f, "rtt:"), "/")
+			if len(parts) >= 2 {
+				conn.TCPInfo.Rtt, _ = strconv.ParseFloat(parts[0], 64)
+				conn.TCPInfo.RttVar, _ = strconv.ParseFloat(parts[1], 64)
+			}
+		} else if strings.HasPrefix(f, "mss:") {
+			conn.TCPInfo.MSS, _ = strconv.Atoi(strings.TrimPrefix(f, "mss:"))
+		}
+	}
 }
 
 // ParseTHP parses /sys/kernel/mm/transparent_hugepage/enabled

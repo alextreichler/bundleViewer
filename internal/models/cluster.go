@@ -30,3 +30,10 @@ type PartitionBalancerStatus struct {
 	PartitionsPendingForceRecoveryCount    int                    `json:"partitions_pending_force_recovery_count"`
 	PartitionsPendingForceRecoverySample   interface{}            `json:"partitions_pending_force_recovery_sample"`
 }
+
+type Anomaly struct {
+	Type     string `json:"type"` // "Raft Index", "Stale Health", "Log Pattern"
+	Severity string `json:"severity"` // "Critical", "Warning"
+	Message  string `json:"message"`
+	Link     string `json:"link"`
+}

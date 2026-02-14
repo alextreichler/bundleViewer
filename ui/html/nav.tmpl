@@ -20,6 +20,7 @@
         <span class="nav-sep"></span>
         
         <a href="/timeline" class="{{if eq .Active "Timeline"}}active{{end}}">Timeline</a>
+        <a href="/consensus" class="{{if eq .Active "Consensus"}}active{{end}}">Consensus</a>
         <a href="/skew" class="{{if eq .Active "Skew"}}active{{end}}">Skew Analysis</a>
         <a href="/diagnostics" class="{{if eq .Active "Diagnostics"}}active{{end}}">Diagnostics</a>
         <a href="/notebook" class="{{if eq .Active "Notebook"}}active{{end}}">Notebook</a>
@@ -79,4 +80,15 @@
         {{end}}
     </div>
 </nav>
+
+<div id="loading-overlay" style="display: none;">
+    <div id="loading-box">
+        <div id="loading-spinner"></div>
+        <p style="margin-top: 1rem; font-weight: 500;" id="loading-text">Loading analysis data...</p>
+        <div id="progress-container" style="display: none; margin-top: 10px; background: var(--border-color); height: 8px; border-radius: 4px; overflow: hidden;">
+            <div id="progress-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.3s;"></div>
+        </div>
+        <p id="progress-status" style="font-size: 0.8rem; color: var(--text-color-muted); margin-top: 5px; display: none;"></p>
+    </div>
+</div>
 {{end}}

@@ -19,6 +19,24 @@ type LogEntry struct {
 	IsPinned    bool        `json:"isPinned"`
 }
 
+// Reset clears the LogEntry for reuse in a sync.Pool
+func (le *LogEntry) Reset() {
+	le.ID = 0
+	le.Timestamp = time.Time{}
+	le.Level = ""
+	le.Node = ""
+	le.Shard = ""
+	le.Component = ""
+	le.Message = ""
+	le.Raw = ""
+	le.LineNumber = 0
+	le.FilePath = ""
+	le.Fingerprint = ""
+	le.Snippet = ""
+	le.Insight = nil
+	le.IsPinned = false
+}
+
 type LogInsight struct {
 	Description string `json:"description"`
 	Severity    string `json:"severity"`

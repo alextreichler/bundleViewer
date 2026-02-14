@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alextreichler/bundleViewer/internal/analysis"
 	"github.com/alextreichler/bundleViewer/internal/models"
 )
 
@@ -39,17 +40,18 @@ type NetworkMetrics struct {
 
 type MetricsPageData struct {
 	BasePageData
-	NodeHostname  string
-	ResourceUsage models.ResourceUsage
-	ShardCPU      []ShardCPUMetric
-	IOMetrics     []IOMetric
-	MaxReadOps    float64 // For bar calculation
-	MaxWriteOps   float64 // For bar calculation
-	SarData       models.SarData
-	CoreCount     int
-	Network       NetworkMetrics
-	RaftRecovery  RaftRecoveryMetrics
-	MetricNames   []string // Added for interactive explorer
+	NodeHostname      string
+	ResourceUsage     models.ResourceUsage
+	ShardCPU          []ShardCPUMetric
+	IOMetrics         []IOMetric
+	MaxReadOps        float64 // For bar calculation
+	MaxWriteOps       float64 // For bar calculation
+	SarData           models.SarData
+	PerformanceReport analysis.PerformanceReport
+	CoreCount         int
+	Network           NetworkMetrics
+	RaftRecovery      RaftRecoveryMetrics
+	MetricNames       []string // Added for interactive explorer
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
@@ -330,22 +332,46 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 6. Performance Analysis (Integrated)
+	// We gather key metrics for AnalyzePerformance
+	perfMetrics := &models.MetricsBundle{
+		Files: make(map[string][]models.PrometheusMetric),
+	}
+	var allMetricList []models.PrometheusMetric
+	// Fetch common perf metrics
+	perfNames := []string{
+		"vectorized_reactor_utilization",
+		"vectorized_network_bytes_received",
+		"vectorized_network_bytes_sent",
+		"vectorized_raft_leadership_changes",
+		"redpanda_rpc_active_connections",
+	}
+	for _, name := range perfNames {
+		ms, _ := s.store.GetMetrics(name, nil, time.Time{}, time.Time{}, 1000, 0)
+		for _, m := range ms {
+			allMetricList = append(allMetricList, *m)
+		}
+	}
+	perfMetrics.Files["snapshot"] = allMetricList
+	perfReport := analysis.AnalyzePerformance(perfMetrics, s.cachedData.SarData)
+
 	baseData := s.newBasePageData("Metrics")
 
 	// 7. Build page data
 	pageData := MetricsPageData{
-		BasePageData:  baseData,
-		NodeHostname:  s.nodeHostname,
-		ResourceUsage: resourceUsage,
-		ShardCPU:      shardCPU,
-		IOMetrics:     ioMetrics,
-		MaxReadOps:    maxReadOps,
-		MaxWriteOps:   maxWriteOps,
-		SarData:       s.cachedData.SarData,
-		CoreCount:     s.cachedData.System.CoreCount,
-		Network:       networkMetrics,
-		RaftRecovery:  baseData.RaftRecovery,
-		MetricNames:   metricNames,
+		BasePageData:      baseData,
+		NodeHostname:      s.nodeHostname,
+		ResourceUsage:     resourceUsage,
+		ShardCPU:          shardCPU,
+		IOMetrics:         ioMetrics,
+		MaxReadOps:        maxReadOps,
+		MaxWriteOps:       maxWriteOps,
+		SarData:           s.cachedData.SarData,
+		PerformanceReport: perfReport,
+		CoreCount:         s.cachedData.System.CoreCount,
+		Network:           networkMetrics,
+		RaftRecovery:      baseData.RaftRecovery,
+		MetricNames:       metricNames,
 	}
 
 	buf := builderPool.Get().(*strings.Builder)

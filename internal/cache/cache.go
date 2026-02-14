@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -121,6 +122,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				ntp, _ := parser.ParseNTP(bundlePath)
 				ips, _ := parser.ParseIP(bundlePath)
 				conns, _ := parser.ParseSS(bundlePath)
+				lsblk, _ := parser.ParseLSBLK(bundlePath)
 				uname, _ := parser.ParseUnameInfo(bundlePath)
 				memInfo, _ := parser.ParseMemInfo(bundlePath)
 				vmStat, _ := parser.ParseVMStat(bundlePath)
@@ -160,7 +162,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				coreCount := len(coreFiles)
 
 				systemData = models.SystemState{
-					FileSystems: df, Memory: free, MemInfo: memInfo, Load: top,
+					FileSystems: df, BlockDevices: lsblk, Memory: free, MemInfo: memInfo, Load: top,
 					Processes: procs,
 					Uname: uname, DMI: dmi, Dig: dig, Syslog: syslog,
 					VMStatAnalysis: vmStatTS, LSPCI: lspci, CPU: cpuInfo, Sysctl: sysctl,
@@ -193,6 +195,7 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 				topicThroughput = make(map[string]float64) // Initialize outer variable
 				
 				if len(metricsFiles) > 0 {
+					p.AddTotal(len(metricsFiles))
 					if defs, err := parser.ParseMetricDefinitions(metricsFiles[0]); err == nil {
 						for k, v := range defs {
 							metricDefinitionsData[k] = v
@@ -201,7 +204,8 @@ func New(bundlePath string, s store.Store, logsOnly bool, p *models.ProgressTrac
 
 					const maxMetricFileSize = 500 * 1024 * 1024 // 500MB limit
 
-					for _, file := range metricsFiles {
+					for i, file := range metricsFiles {
+						p.Update(1, fmt.Sprintf("Parsing metrics (%d/%d): %s", i+1, len(metricsFiles), filepath.Base(file)))
 						fi, err := os.Stat(file)
 						if err == nil {
 							if fi.Size() > maxMetricFileSize {

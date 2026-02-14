@@ -40,6 +40,34 @@ type NetworkConnection struct {
 	LocalAddr string
 	PeerAddr  string
 	Process   string
+	TCPInfo   *TCPInfo
+}
+
+type TCPInfo struct {
+	Retrans      int
+	RetransTotal int
+	RTO          float64 // ms
+	ATO          float64 // ms
+	Cwnd         int
+	Ssthresh     int
+	Rtt          float64 // ms
+	RttVar       float64 // ms
+	MSS          int
+	RcvMSS       int
+	AdvMSS       int
+}
+
+// BlockDevice represents a row from lsblk
+type BlockDevice struct {
+	Name       string
+	KName      string
+	Type       string // disk, part, lvm
+	Size       string
+	Model      string
+	Scheduler  string
+	ReadOnly   bool
+	MountPoint string
+	Children   []BlockDevice
 }
 
 // PortCount for sorting
@@ -198,6 +226,7 @@ type Interrupts struct {
 // SystemState aggregates all system level information
 type SystemState struct {
 	FileSystems []FileSystemEntry
+	BlockDevices []BlockDevice // From utils/lsblk.txt
 	Memory      MemoryStats
 	MemInfo     MemInfo // Detailed memory info from /proc/meminfo
 	Load        LoadAvg

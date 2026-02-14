@@ -8,19 +8,17 @@
 	<script src="/static/htmx.min.js"></script>
 </head>
 <body>
-	<div id="loading-overlay">
-		<div id="loading-box">
-			<h2>Loading...</h2>
-			<div id="progress-container">
-				<div id="progress-bar">0%</div>
-			</div>
-            <p id="loading-status" style="margin-top: 1rem; color: var(--text-color-muted); font-size: 0.875rem; text-align: center;"></p>
-		</div>
-	</div>
-
     {{template "nav" .}}
 
 	<div class="container">
+		{{if .HealthDiscrepancy}}
+		<div class="alert-box" style="margin-bottom: 2rem;">
+			<strong>⚠️ Leadership Info Discrepancy Detected</strong>
+			<p>{{.HealthDiscrepancy}}</p>
+			<p style="font-size: 0.85rem; margin-top: 0.5rem;"><em>Note: Health reporting can sometimes be stale. Kafka metadata is generally more authoritative for current state.</em></p>
+		</div>
+		{{end}}
+
 		<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
 			<div>
 				<h1>Bundle Overview</h1>
@@ -33,6 +31,27 @@
 				<button type="submit">Search</button>
 			</form>
 		</div>
+
+		{{if .Anomalies}}
+		<div class="card" style="border-left: 5px solid #ef4444; margin-bottom: 2rem;">
+			<h3 style="color: #ef4444; display: flex; align-items: center; gap: 0.5rem;">
+				<span>🚩</span> Critical Anomalies & Warnings
+			</h3>
+			<p style="color: var(--text-color-muted); font-size: 0.9rem; margin-bottom: 1rem;">The following patterns or values were detected that strongly indicate cluster instability or misconfiguration.</p>
+			
+			<div style="display: flex; flex-direction: column; gap: 10px;">
+				{{range .Anomalies}}
+				<div style="padding: 1rem; background: rgba(0,0,0,0.02); border-radius: var(--radius); border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+					<div>
+						<span class="badge {{if eq .Severity "Critical"}}bg-danger{{else}}bg-warning{{end}}" style="margin-right: 10px; color: white;">{{.Type}}</span>
+						<span style="font-weight: 500;">{{.Message}}</span>
+					</div>
+					<a href="{{.Link}}" class="button" style="font-size: 0.75rem; padding: 4px 12px;">Inspect &rarr;</a>
+				</div>
+				{{end}}
+			</div>
+		</div>
+		{{end}}
 
 		<div class="grid-2">
 			<div class="card">
@@ -162,6 +181,9 @@
 						<p style="color: #ef4444;">Error: {{.Error}}</p>
 					{{else if eq .FileName "kafka.json"}}
 						<p><a href="/kafka">View Kafka Metadata &rarr;</a></p>
+					{{else if eq .FileName "redpanda.yaml"}}
+						<p><a href="https://docs.redpanda.com/current/reference/node-properties/" target="_blank" style="font-weight: 600; text-decoration: underline; color: var(--link-color);">Redpanda Node Configuration Documentation &rarr;</a></p>
+						{{renderData .FileName .Data}}
 					{{else}}
 						{{renderData .FileName .Data}}
 					{{end}}

@@ -17,6 +17,8 @@ type Store interface {
 	GetDistinctLogNodes() ([]string, error)
 	GetDistinctLogComponents() ([]string, error)
 	GetDistinctMetricNames() ([]string, error)
+	GetRaftEvents(ntp string) ([]models.RaftTimelineEvent, error)
+	GetGlobalRaftEvents() ([]models.RaftTimelineEvent, error)
 
 	PinLog(logID int64) error
 	UnpinLog(logID int64) error

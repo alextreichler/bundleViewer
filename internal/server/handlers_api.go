@@ -91,7 +91,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Initialize Progress
-	s.progress = models.NewProgressTracker(21)
+	s.progress.Reset(23)
 
 	// 1. Generate unique DB name for this bundle
 	bundleName := filepath.Base(bundlePath)
@@ -247,8 +247,8 @@ func (s *Server) progressHandler(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return // Connection closed by client
 		default:
-			percentage, status, finished := s.progress.Get()
-			if _, err := fmt.Fprintf(w, "data: {\"progress\": %d, \"status\": \"%s\", \"finished\": %v}\n\n", percentage, status, finished); err != nil {
+			percentage, status, finished, eta := s.progress.Get()
+			if _, err := fmt.Fprintf(w, "data: {\"progress\": %d, \"status\": \"%s\", \"finished\": %v, \"eta\": %d}\n\n", percentage, status, finished, eta); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -281,9 +281,11 @@ func (s *Server) topicDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leaderMap := make(map[string]int, len(leaders))
+	leaderTermMap := make(map[string]int, len(leaders))
 	for _, l := range leaders {
 		key := fmt.Sprintf("%s-%d", l.Topic, l.PartitionID)
 		leaderMap[key] = l.Leader
+		leaderTermMap[key] = l.LastStableLeaderTerm
 	}
 
 	var topicPartitions []models.PartitionInfo
@@ -296,14 +298,37 @@ func (s *Server) topicDetailsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			
 			info := models.PartitionInfo{
+				Ns:       p.Ns,
+				Topic:    p.Topic,
 				ID:       p.PartitionID,
 				Leader:   leaderMap[key],
+				Term:     leaderTermMap[key],
 				Replicas: replicas,
 				Status:   p.Status,
 			}
 			
-			// Add insight if under-replicated
-			info.Insight = analysis.AnalyzeReplication(p, debugMap)
+			// Add Raft Details from debug info
+			if tMap, ok := debugMap[p.Topic]; ok {
+				if d, ok := tMap[p.PartitionID]; ok {
+					for _, r := range d.Replicas {
+						info.RaftDetails = append(info.RaftDetails, models.ReplicaRaftInfo{
+							NodeID:   r.RaftState.NodeID,
+							IsLeader: r.RaftState.IsLeader || r.RaftState.IsElectedLeader,
+							Term:     r.RaftState.Term,
+						})
+					}
+				}
+			}
+
+			// Add insight if under-replicated or leaderless
+			kafkaLeader := -2 // Sentinel for "not found in metadata"
+			if topicMeta, ok := s.cachedData.KafkaMetadata.Topics[p.Topic]; ok {
+				if partMeta, ok := topicMeta.Partitions[strconv.Itoa(p.PartitionID)]; ok {
+					kafkaLeader = partMeta.Leader
+				}
+			}
+
+			info.Insight = analysis.AnalyzeReplication(p, debugMap, kafkaLeader)
 			
 			topicPartitions = append(topicPartitions, info)
 		}
@@ -312,6 +337,26 @@ func (s *Server) topicDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(topicPartitions); err != nil {
 		s.logger.Error("Error encoding topic details", "error", err)
+	}
+}
+
+func (s *Server) apiRaftTimelineHandler(w http.ResponseWriter, r *http.Request) {
+	ntp := r.URL.Query().Get("ntp")
+	if ntp == "" {
+		http.Error(w, "ntp parameter required", http.StatusBadRequest)
+		return
+	}
+
+	events, err := s.store.GetRaftEvents(ntp)
+	if err != nil {
+		s.logger.Error("Error getting raft events", "ntp", ntp, "error", err)
+		http.Error(w, "Failed to retrieve raft events", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(events); err != nil {
+		s.logger.Error("Error encoding raft events", "error", err)
 	}
 }
 

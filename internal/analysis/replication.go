@@ -10,7 +10,54 @@ import (
 func AnalyzeReplication(
 	p models.ClusterPartition,
 	debugMap map[string]map[int]models.PartitionDebug,
+	kafkaLeader int,
 ) *models.PartitionInsight {
+	// 1. Discrepancy Check (authoritative Kafka Metadata vs Redpanda internal health)
+	if p.LeaderID != kafkaLeader && kafkaLeader != -2 { // -2 is our "not found" sentinel
+		return &models.PartitionInsight{
+			Summary:     fmt.Sprintf("LEADERSHIP DISCREPANCY: Redpanda internal says leader is %d, but Kafka metadata says %d. This node likely has stale health information.", p.LeaderID, kafkaLeader),
+			Severity:    "warn",
+			Remediation: "If Redpanda reports this as leaderless but Kafka shows a leader, the reporting node may be stale. Check if the node is under heavy load or has reactor stalls.",
+		}
+	}
+
+	// 2. Detect Leaderless Partitions (Critical)
+	if p.LeaderID == -1 {
+		insight := &models.PartitionInsight{
+			Summary:  "Partition is LEADERLESS. No node is currently acting as the leader.",
+			Severity: "error",
+		}
+
+		// Try to find clues in debug info
+		if tMap, ok := debugMap[p.Topic]; ok {
+			if d, ok := tMap[p.PartitionID]; ok {
+				if len(d.Replicas) < len(p.Replicas) {
+					insight.Summary += fmt.Sprintf(" Only %d/%d replicas reported debug info.", len(d.Replicas), len(p.Replicas))
+				}
+
+				// Check if any node thinks it's a leader but isn't recognized
+				for _, r := range d.Replicas {
+					if r.RaftState.IsLeader || r.RaftState.IsElectedLeader {
+						insight.Summary += fmt.Sprintf(" Node %d thinks it is the leader, but the cluster disagrees.", r.RaftState.NodeID)
+					}
+					
+					// Check for abnormal uninitialized indices (MinInt64-like)
+					for _, f := range r.RaftState.Followers {
+						if f.LastFlushedLogIndex < -1000000 {
+							insight.Summary += fmt.Sprintf(" Abnormal log index (%d) detected for follower %d.", f.LastFlushedLogIndex, f.ID)
+						}
+					}
+				}
+			}
+		}
+
+		if insight.Remediation == "" {
+			ntp := fmt.Sprintf("%s/%s/%d", p.Ns, p.Topic, p.PartitionID)
+			insight.Remediation = fmt.Sprintf("View leadership history: <button onclick=\"showRaftTimeline('%s')\" class='button' style='padding:2px 8px; font-size:0.7rem;'>📜 Raft History</button>", ntp)
+		}
+		return insight
+	}
+
 	if p.Status != "under_replicated" {
 		return nil
 	}

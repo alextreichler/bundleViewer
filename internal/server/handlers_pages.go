@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ type HomePageData struct {
 	RackAwarenessEnabled      bool
 	RackInfo                  map[string]RackData
 	StartupTime               time.Time
+	HealthDiscrepancy         string
+	Anomalies                 []models.Anomaly
 }
 
 func (s *Server) setupHandler(w http.ResponseWriter, r *http.Request) {
@@ -417,6 +420,31 @@ func (s *Server) buildHomePageData() HomePageData {
 
 	nodesDown := len(s.cachedData.HealthOverview.NodesDown)
 
+	healthDiscrepancy := ""
+	// Global Discrepancy Check
+	kafkaLeaderlessCount := 0
+	for _, topic := range s.cachedData.KafkaMetadata.Topics {
+		for _, part := range topic.Partitions {
+			if part.Leader == -1 {
+				kafkaLeaderlessCount++
+			}
+		}
+	}
+
+	if leaderlessPartitions > 0 && kafkaLeaderlessCount == 0 {
+		healthDiscrepancy = fmt.Sprintf("Health report shows %d leaderless partitions, but Kafka metadata shows ALL have leaders. This is a discrepancy (likely stale info).", leaderlessPartitions)
+	} else if leaderlessPartitions == 0 && kafkaLeaderlessCount > 0 {
+		healthDiscrepancy = fmt.Sprintf("Health report shows healthy, but Kafka metadata shows %d leaderless partitions. This is a discrepancy (stale info).", kafkaLeaderlessCount)
+	}
+
+	patterns, _, _ := s.store.GetLogPatterns()
+	anomalies := analysis.DetectAnomalies(
+		s.cachedData.PartitionDebug,
+		s.cachedData.KafkaMetadata,
+		s.cachedData.HealthOverview,
+		patterns,
+	)
+
 	return HomePageData{
 		GroupedFiles:              s.cachedData.GroupedFiles,
 		NodeHostname:              s.nodeHostname,
@@ -431,6 +459,8 @@ func (s *Server) buildHomePageData() HomePageData {
 		RackAwarenessEnabled:      rackAwarenessEnabled,
 		RackInfo:                  rackInfo,
 		StartupTime:               time.Now(),
+		HealthDiscrepancy:         healthDiscrepancy,
+		Anomalies:                 anomalies,
 	}
 }
 
@@ -497,6 +527,8 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 		}
 
 		info := models.PartitionInfo{
+			Ns:       p.Ns,
+			Topic:    p.Topic,
 			ID:       p.PartitionID,
 			Replicas: replicas,
 			Leader:   leader,
@@ -504,7 +536,13 @@ func (s *Server) buildPartitionsPageData() PartitionsPageData {
 		}
 
 		// Generate Insights
-		info.Insight = analysis.AnalyzeReplication(p, debugMap)
+		kafkaLeader := -2
+		if topicMeta, ok := s.cachedData.KafkaMetadata.Topics[p.Topic]; ok {
+			if partMeta, ok := topicMeta.Partitions[strconv.Itoa(p.PartitionID)]; ok {
+				kafkaLeader = partMeta.Leader
+			}
+		}
+		info.Insight = analysis.AnalyzeReplication(p, debugMap, kafkaLeader)
 
 		topics[p.Topic].Partitions = append(topics[p.Topic].Partitions, info)
 	}
