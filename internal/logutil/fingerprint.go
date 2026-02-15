@@ -4,10 +4,21 @@ import (
 	"strings"
 )
 
+// FingerprinterOverride can be set by other packages (like internal/parser) to use
+// an accelerated implementation if available.
+var FingerprinterOverride func(string) string
+
 // GenerateFingerprint creates a generic signature for a log message.
 // It uses a token-aware approach inspired by the Drain algorithm, splitting by common
 // log delimiters and masking tokens that contain variable data (digits, hex, etc.)
 func GenerateFingerprint(message string) string {
+	if FingerprinterOverride != nil {
+		return FingerprinterOverride(message)
+	}
+	return defaultGenerateFingerprint(message)
+}
+
+func defaultGenerateFingerprint(message string) string {
 	if len(message) == 0 {
 		return ""
 	}

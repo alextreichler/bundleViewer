@@ -13,10 +13,20 @@ function initProgress() {
             const status = data.status;
             const eta = data.eta;
             
+            const loadingTitle = document.getElementById('loading-title');
+            if (loadingTitle) {
+                loadingTitle.textContent = `Analyzing Bundle... ${progress}%`;
+            }
+
             progressBar.style.width = progress + '%';
             progressBar.textContent = progress + '%';
             
-            const statusEl = document.getElementById('loading-status');
+            const progressContainer = document.getElementById('progress-container');
+            if (progressContainer) {
+                progressContainer.style.display = 'block';
+            }
+            
+            const statusEl = document.getElementById('progress-status');
             if (statusEl && status) {
                 let displayStatus = status;
                 if (eta > 0) {

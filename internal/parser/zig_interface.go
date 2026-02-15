@@ -11,10 +11,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unsafe"
 
+	"github.com/alextreichler/bundleViewer/internal/logutil"
 	"github.com/alextreichler/bundleViewer/internal/models"
 )
+
+func init() {
+	logutil.FingerprinterOverride = ZigFingerprint
+}
 
 type ZigParser struct{}
 
@@ -40,6 +46,36 @@ func (zp *ZigParser) Free(lines []C.LogLineInfo) {
 		return
 	}
 	C.zig_free_result((*C.LogLineInfo)(unsafe.Pointer(&lines[0])), C.size_t(len(lines)))
+}
+
+var fingerprintBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 4096)
+	},
+}
+
+func ZigFingerprint(message string) string {
+	if len(message) == 0 {
+		return ""
+	}
+
+	msgLen := len(message)
+	// Markers like <NUM> can be longer than the tokens they replace.
+	// 2x should be plenty.
+	needed := msgLen * 2
+	
+	var buf []byte
+	if needed <= 4096 {
+		buf = fingerprintBufPool.Get().([]byte)
+		defer fingerprintBufPool.Put(buf)
+	} else {
+		buf = make([]byte, needed)
+	}
+
+	msgPtr := unsafe.StringData(message)
+	n := C.zig_fingerprint((*C.char)(unsafe.Pointer(msgPtr)), C.size_t(msgLen), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+
+	return string(buf[:n])
 }
 
 func (lp *LogParser) parseFileZig(filePath string, batchChan chan<- []*models.LogEntry) error {
@@ -68,8 +104,9 @@ func (lp *LogParser) parseFileZig(filePath string, batchChan chan<- []*models.Lo
 	var currentEntry *models.LogEntry
 
 	for i, lineInfo := range lines {
-		if lp.tracker != nil && i%50000 == 0 {
-			lp.tracker.SetStatus(fmt.Sprintf("Parsing logs (Zig): %s (%d/%d lines)", filepath.Base(filePath), i, len(lines)))
+		if lp.tracker != nil && i%100000 == 0 {
+			pct := (i * 100) / len(lines)
+			lp.tracker.SetStatus(fmt.Sprintf("Parsing logs (Zig): %s [%d/%d lines, %d%%]", filepath.Base(filePath), i, len(lines), pct))
 		}
 
 		lineStart := int(lineInfo.line_start)

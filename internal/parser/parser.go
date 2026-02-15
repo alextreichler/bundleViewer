@@ -560,8 +560,8 @@ func (lp *LogParser) parseFile(filePath string, batchChan chan<- []*models.LogEn
 
 	for scanner.Scan() {
 		lineNumber++
-		if lp.tracker != nil && lineNumber%50000 == 0 {
-			lp.tracker.SetStatus(fmt.Sprintf("Parsing logs: %s (%d lines)", filepath.Base(filePath), lineNumber))
+		if lp.tracker != nil && lineNumber%100000 == 0 {
+			lp.tracker.SetStatus(fmt.Sprintf("Parsing logs (Go): %s [%d lines ingested]", filepath.Base(filePath), lineNumber))
 		}
 		line := scanner.Text()
 		if len(line) > 50000 || len(line) == 0 {

@@ -22,4 +22,7 @@ typedef struct {
 LogLineInfo* zig_parse_logs(const char* data, size_t len, size_t* count_out);
 void zig_free_result(LogLineInfo* lines, size_t count);
 
+// Fingerprinting
+size_t zig_fingerprint(const char* data, size_t len, char* out_buf, size_t out_len);
+
 #endif

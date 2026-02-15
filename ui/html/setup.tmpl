@@ -100,6 +100,11 @@
                 const finished = data.finished;
                 const eta = data.eta;
 
+                const loadingTitle = document.getElementById('loading-title');
+                if (loadingTitle) {
+                    loadingTitle.textContent = `Analyzing Bundle... ${progress}%`;
+                }
+
                 progressBar.style.width = progress + '%';
                 progressBar.textContent = progress + '%';
                 
