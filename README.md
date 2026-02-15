@@ -75,6 +75,8 @@ BundleViewer is optimized for ephemeral container environments (AWS EKS, Fargate
 *   **Auto-Cleanup:** Self-terminates after a period of inactivity to save costs.
 *   **Resource Tuning:** Scales its memory footprint to fit your container limits.
 
+**Note:** All cloud features are optional and default to off. Local usage remains exactly the same.
+
 See the **[Cloud Deployment Guide](CLOUD_DEPLOYMENT.md)** for more details.
 
 ### CLI Options

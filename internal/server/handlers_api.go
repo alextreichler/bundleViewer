@@ -72,6 +72,11 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	if s.oneShot && s.bundlePath != "" {
+		http.Error(w, "Setup is disabled in one-shot mode", http.StatusForbidden)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -153,6 +158,11 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSwitchBundle(w http.ResponseWriter, r *http.Request) {
+	if s.oneShot {
+		http.Error(w, "Bundle switching is disabled in one-shot mode", http.StatusForbidden)
+		return
+	}
+
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		http.Error(w, "Path required", http.StatusBadRequest)

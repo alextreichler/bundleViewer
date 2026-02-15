@@ -718,10 +718,11 @@ func checkK8sShardOptimization(data *cache.CachedData) []CheckResult {
 		return results
 	}
 
-	// Determine shard count from leaders or metrics
-	// (Safest way is to check the max shard ID seen in any metric)
-	// For now, we can use HealthOverview if we added it, or assume from core count if we find --smp
-	
+	cmdLine := strings.ToLower(data.System.CmdLine)
+	isOverprovisioned := strings.Contains(cmdLine, "--overprovisioned")
+	hostCores := data.System.CoreCount
+
+	// Determine shard count from config or cmdline
 	smpVal := 0
 	if val, ok := data.RedpandaConfig["redpanda.smp"]; ok {
 		if s, ok := val.(string); ok {
@@ -730,14 +731,29 @@ func checkK8sShardOptimization(data *cache.CachedData) []CheckResult {
 			smpVal = i
 		}
 	}
+	// Fallback to cmdline
+	if smpVal == 0 && strings.Contains(cmdLine, "--smp") {
+		parts := strings.Fields(cmdLine)
+		for i, p := range parts {
+			if strings.HasPrefix(p, "--smp") {
+				val := ""
+				if strings.Contains(p, "=") {
+					val = strings.Split(p, "=")[1]
+				} else if i+1 < len(parts) {
+					val = parts[i+1]
+				}
+				smpVal, _ = strconv.Atoi(val)
+				break
+			}
+		}
+	}
 
 	if smpVal == 0 {
 		return results // Could not determine shard count
 	}
 
-	hostCores := data.System.CoreCount
-	
-	if smpVal >= hostCores && hostCores > 1 {
+	// 1. Audit "K8s CPU Tax" (N-1 logic)
+	if smpVal >= hostCores && hostCores > 1 && !isOverprovisioned {
 		results = append(results, CheckResult{
 			Category:      "Kubernetes Performance",
 			Name:          "K8s Shard Tax (N-1)",
@@ -745,17 +761,35 @@ func checkK8sShardOptimization(data *cache.CachedData) []CheckResult {
 			CurrentValue:  fmt.Sprintf("%d shards on %d cores", smpVal, hostCores),
 			ExpectedValue: fmt.Sprintf("%d shards (N-1)", hostCores-1),
 			Status:        SeverityWarning,
-			Remediation:   "In K8s, it is recommended to run Redpanda with N-1 shards (e.g., --smp=3 on a 4-core machine) to leave room for the Kubelet and system processes.",
+			Remediation:   "In K8s, it is recommended to run Redpanda with one fewer shard than host cores (N-1) to leave room for the Kubelet and system processes. Action: Set '--smp' to N-1 or ensure '--overprovisioned' is used if cores must be shared.",
 		})
-	} else if hostCores > 32 && smpVal < 8 {
+	}
+
+	// 2. Large Core Count Node Check
+	if hostCores >= 32 && smpVal > 0 && smpVal < (hostCores/2) {
+		if !isOverprovisioned {
+			results = append(results, CheckResult{
+				Category:      "Kubernetes Performance",
+				Name:          "Large Core Node Interference",
+				Description:   "Redpanda is using a small subset of a large-core host",
+				CurrentValue:  fmt.Sprintf("%d Shards on %d Core Host", smpVal, hostCores),
+				ExpectedValue: "--overprovisioned=true",
+				Status:        SeverityWarning,
+				Remediation:   "Redpanda can experience poor IOPS on Kubernetes nodes with large core counts if it only uses a small fraction of the cores. Action: Enable '--overprovisioned' mode to mitigate kernel scheduler/DIO interference.",
+			})
+		}
+	}
+
+	// 3. Busy Spinning in Shared Environment
+	if !isOverprovisioned {
 		results = append(results, CheckResult{
 			Category:      "Kubernetes Performance",
-			Name:          "Large Core Sparse Allocation",
-			Description:   "Small shard count on a very large host",
-			CurrentValue:  fmt.Sprintf("%d shards on %d cores", smpVal, hostCores),
-			ExpectedValue: "Use '--overprovisioned'",
+			Name:          "Busy Spinning Mode",
+			Description:   "Redpanda busy-spinning is enabled in a potentially shared environment",
+			CurrentValue:  "spinning=on",
+			ExpectedValue: "spinning=off (via --overprovisioned)",
 			Status:        SeverityInfo,
-			Remediation:   "On large core machines (>32 cores), sparse shard allocation can lead to IOPS issues. Ensure '--overprovisioned' is enabled.",
+			Remediation:   "Redpanda reactor threads busy-spin by default for lowest latency. In shared Kubernetes environments, this can cause contention. If throughput is low or CPU usage is high without useful work, consider enabling '--overprovisioned'.",
 		})
 	}
 
