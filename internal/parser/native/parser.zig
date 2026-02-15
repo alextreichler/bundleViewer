@@ -223,3 +223,87 @@ fn get_variable_marker_simd(s: []const u8) ?[]const u8 {
 
     return null;
 }
+
+pub const MetricInfo = extern struct {
+    name_offset: u32,
+    name_len: u32,
+    labels_offset: u32,
+    labels_len: u32,
+    value: f64,
+};
+
+export fn zig_parse_metrics(data: [*]const u8, len: usize, count_out: *usize) ?[*]MetricInfo {
+    const allocator = std.heap.c_allocator;
+    var metrics = std.ArrayList(MetricInfo){};
+    errdefer metrics.deinit(allocator);
+
+    const in_data = data[0..len];
+    var offset: usize = 0;
+
+    while (offset < len) {
+        // Find end of line
+        var line_end = offset;
+        if (mem.indexOfScalar(u8, in_data[offset..], 10)) |newline_idx| {
+            line_end = offset + newline_idx;
+        } else {
+            line_end = len;
+        }
+
+        const line = in_data[offset..line_end];
+        const trimmed_line = mem.trim(u8, line, " \t\r");
+
+        if (trimmed_line.len > 0 and trimmed_line[0] != '#') {
+            // Find last space to separate value
+            if (mem.lastIndexOfScalar(u8, trimmed_line, ' ')) |last_space_idx| {
+                const value_str = trimmed_line[last_space_idx + 1 ..];
+                const rest = trimmed_line[0..last_space_idx];
+
+                if (std.fmt.parseFloat(f64, value_str)) |val| {
+                    var info = MetricInfo{
+                        .name_offset = 0,
+                        .name_len = 0,
+                        .labels_offset = 0,
+                        .labels_len = 0,
+                        .value = val,
+                    };
+
+                    // Check for labels
+                    if (mem.indexOfScalar(u8, rest, '{')) |open_brace_idx| {
+                        if (mem.lastIndexOfScalar(u8, rest, '}')) |close_brace_idx| {
+                            if (close_brace_idx > open_brace_idx) {
+                                info.name_offset = @intCast(offset + (mem.indexOf(u8, line, rest) orelse 0));
+                                info.name_len = @intCast(open_brace_idx);
+                                
+                                info.labels_offset = @intCast(offset + (mem.indexOf(u8, line, rest) orelse 0) + open_brace_idx + 1);
+                                info.labels_len = @intCast(close_brace_idx - open_brace_idx - 1);
+                            }
+                        }
+                    }
+
+                    if (info.name_len == 0) {
+                        // No labels or malformed labels
+                        info.name_offset = @intCast(offset + (mem.indexOf(u8, line, rest) orelse 0));
+                        info.name_len = @intCast(rest.len);
+                    }
+
+                    metrics.append(allocator, info) catch return null;
+                } else |_| {
+                    // Ignore lines with invalid values (NaN, Inf are handled by parseFloat if standard, 
+                    // but we might want to skip them if they don't look like numbers)
+                }
+            }
+        }
+
+        offset = line_end + 1;
+    }
+
+    count_out.* = metrics.items.len;
+    const result = metrics.toOwnedSlice(allocator) catch return null;
+    return result.ptr;
+}
+
+export fn zig_free_metrics(metrics: [*]MetricInfo, count: usize) void {
+    const allocator = std.heap.c_allocator;
+    const slice = metrics[0..count];
+    allocator.free(slice);
+}

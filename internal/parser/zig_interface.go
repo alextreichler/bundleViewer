@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/alextreichler/bundleViewer/internal/logutil"
 	"github.com/alextreichler/bundleViewer/internal/models"
+	"github.com/alextreichler/bundleViewer/internal/store"
 )
 
 func init() {
@@ -181,6 +183,106 @@ func (lp *LogParser) parseFileZig(filePath string, batchChan chan<- []*models.Lo
 	}
 	if len(batch) > 0 {
 		batchChan <- batch
+	}
+
+	return nil
+}
+
+func (zp *ZigParser) ParseMetrics(data []byte) ([]C.MetricInfo, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var count C.size_t
+	resPtr := C.zig_parse_metrics((*C.char)(unsafe.Pointer(&data[0])), C.size_t(len(data)), &count)
+	if resPtr == nil {
+		return nil, fmt.Errorf("zig_parse_metrics failed")
+	}
+
+	return unsafe.Slice(resPtr, int(count)), nil
+}
+
+func (zp *ZigParser) FreeMetrics(metrics []C.MetricInfo) {
+	if len(metrics) == 0 {
+		return
+	}
+	C.zig_free_metrics((*C.MetricInfo)(unsafe.Pointer(&metrics[0])), C.size_t(len(metrics)))
+}
+
+func ZigParsePrometheusMetrics(filePath string, allowedMetrics map[string]struct{}, s store.Store, metricTimestamp time.Time) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	zp := &ZigParser{}
+	mInfos, err := zp.ParseMetrics(data)
+	if err != nil {
+		return err
+	}
+	defer zp.FreeMetrics(mInfos)
+
+	var batch []*models.PrometheusMetric
+	const batchSize = 10000
+
+	for _, info := range mInfos {
+		name := string(data[int(info.name_offset) : int(info.name_offset+info.name_len)])
+		
+		if allowedMetrics != nil {
+			if _, ok := allowedMetrics[name]; !ok {
+				continue
+			}
+		}
+
+		var labelsJSON string
+		if info.labels_len > 0 {
+			labelsContent := string(data[int(info.labels_offset) : int(info.labels_offset+info.labels_len)])
+			
+			// Transform label content to JSON: key="value",key2="value2" -> {"key":"value","key2":"value2"}
+			var sb strings.Builder
+			sb.Grow(len(labelsContent) + 2)
+			sb.WriteByte('{')
+			
+			pairs := strings.Split(labelsContent, ",")
+			for i, p := range pairs {
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				eq := strings.IndexByte(p, '=')
+				if eq != -1 {
+					k := strings.TrimSpace(p[:eq])
+					v := strings.TrimSpace(p[eq+1:])
+					
+					sb.WriteByte('"')
+					sb.WriteString(k)
+					sb.WriteString(`":`)
+					sb.WriteString(v)
+				}
+			}
+			sb.WriteByte('}')
+			labelsJSON = sb.String()
+		} else {
+			labelsJSON = "{}"
+		}
+
+		batch = append(batch, &models.PrometheusMetric{
+			Name:       name,
+			LabelsJSON: labelsJSON,
+			Value:      float64(info.value),
+		})
+
+		if len(batch) >= batchSize {
+			if err := s.BulkInsertMetrics(batch, metricTimestamp); err != nil {
+				return err
+			}
+			batch = batch[:0]
+		}
+	}
+
+	if len(batch) > 0 {
+		if err := s.BulkInsertMetrics(batch, metricTimestamp); err != nil {
+			return err
+		}
 	}
 
 	return nil

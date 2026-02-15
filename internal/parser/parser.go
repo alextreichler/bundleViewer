@@ -1549,6 +1549,13 @@ func ParseMetricDefinitions(filePath string) (map[string]string, error) {
 // ParsePrometheusMetrics parses a file containing Prometheus text-format metrics
 // and stores them in the provided store.
 func ParsePrometheusMetrics(filePath string, allowedMetrics map[string]struct{}, s store.Store, metricTimestamp time.Time) error {
+	// Try Zig accelerator first
+	if err := ZigParsePrometheusMetrics(filePath, allowedMetrics, s, metricTimestamp); err == nil {
+		return nil
+	} else {
+		slog.Warn("Zig metrics parser failed, falling back to standard parser", "path", filePath, "error", err)
+	}
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
