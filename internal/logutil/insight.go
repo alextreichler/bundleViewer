@@ -208,6 +208,24 @@ var CommonErrorKnowledgeBase = []LogInsight{
 		Severity:    "Critical",
 		Action:      "DANGER: This operation involves data loss by truncating logs. Verify data consistency for the affected partition.",
 	},
+	{
+		Pattern:     `RPC timeout.*time since:`,
+		Description: "RPC Timeout with Telemetry. The request expired before completion.",
+		Severity:    "Warning",
+		Action:      "Analyze 'time since' fields: 'init' > timeout means overload; 'memory_reserved' > 0 means backpressure; 'dispatch' high means head-of-line blocking; 'written' high means network/kernel latency.",
+	},
+	{
+		Pattern:     `Creating new segment`,
+		Description: "New Segment Creation.",
+		Severity:    "Info",
+		Action:      "On ext4, this requires a synchronous journal update which can stall the reactor. If frequent, check for too many small partitions or aggressive topic creation.",
+	},
+	{
+		Pattern:     `controller_stm.*snapshot`,
+		Description: "Controller Snapshot Activity.",
+		Severity:    "Info",
+		Action:      "Large controller snapshots can cause micro-stalls. If this coincides with RPC timeouts, consider increasing timeout settings.",
+	},
 }
 
 func init() {

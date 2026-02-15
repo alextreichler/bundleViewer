@@ -135,13 +135,13 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 	if summary.ElectedCount > 0 && summary.StepdownCount > 0 {
 		diff := summary.ElectedCount - summary.StepdownCount
 		if diff < 5 && diff > -5 && summary.ElectedCount > 10 {
-			summary.Insights = append(summary.Insights, "🔄 **Election/Stepdown Loop:** The number of elections nearly matches stepdowns. This indicates 'Leadership Churn'—where nodes lose leadership due to transient stalls and immediately re-elect themselves once the stall clears.")
+			summary.Insights = append(summary.Insights, "🔄 **Election/Stepdown Loop:** The number of elections nearly matches stepdowns. This indicates 'Leadership Churn'—where nodes lose leadership due to transient stalls (e.g. ext4 journal updates or snapshots) and immediately re-elect themselves once the stall clears.")
 		}
 	}
 
 	// Logic 3: RPC Timeouts
 	if summary.TimeoutCount > 0 {
-		summary.Insights = append(summary.Insights, fmt.Sprintf("⏰ **RPC Timeouts detected:** Found %d raft timeouts. These are leading indicators of metadata pressure or 'Stability Storms' caused by aggressive timeout settings (e.g. 100ms node_status_interval).", summary.TimeoutCount))
+		summary.Insights = append(summary.Insights, fmt.Sprintf("⏰ **RPC Timeouts detected:** Found %d raft timeouts. These are leading indicators of 'Stability Storms'. Check for 'Seastar reactor stalled' logs at the exact same time; if they match, the CPU was blocked by the filesystem or kernel.", summary.TimeoutCount))
 	}
 
 	// Prepare Hotspot Stats

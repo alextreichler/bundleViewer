@@ -157,6 +157,9 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 	}
 	results = append(results, checkMemoryReclaimPressure(pressureBundle)...)
 
+	// 34. RPC Telemetry and Stability Checks
+	results = append(results, checkRPCTimeouts(s)...)
+
 	return DiagnosticsReport{Results: results}
 }
 
@@ -2348,6 +2351,50 @@ func checkDataDirPartition(data *cache.CachedData) []CheckResult {
 		}
 	}
 	
+	return results
+}
+
+func checkRPCTimeouts(s store.Store) []CheckResult {
+	var results []CheckResult
+
+	// 1. Check redpanda_node_status_rpcs_timed_out_total (Liveness checks)
+	statusTimeouts, _ := s.GetMetrics("redpanda_node_status_rpcs_timed_out_total", nil, time.Time{}, time.Time{}, 0, 0)
+	totalStatusTimeouts := 0.0
+	for _, m := range statusTimeouts {
+		totalStatusTimeouts += m.Value
+	}
+
+	if totalStatusTimeouts > 0 {
+		results = append(results, CheckResult{
+			Category:      "Consensus",
+			Name:          "Node Status RPC Timeouts",
+			Description:   "Timeouts detected in the 100ms internal liveness checks",
+			CurrentValue:  fmt.Sprintf("%.0f timeouts", totalStatusTimeouts),
+			ExpectedValue: "0 timeouts",
+			Status:        SeverityWarning,
+			Remediation:   "Node status timeouts are 'leading indicators' of metadata pressure. They often trigger hostile elections. Action: Increase 'node_status_interval' to 1000ms.",
+		})
+	}
+
+	// 2. Check redpanda_rpc_client_requests_blocked_memory_total
+	blockedMem, _ := s.GetMetrics("redpanda_rpc_client_requests_blocked_memory_total", nil, time.Time{}, time.Time{}, 0, 0)
+	totalBlocked := 0.0
+	for _, m := range blockedMem {
+		totalBlocked += m.Value
+	}
+
+	if totalBlocked > 0 {
+		results = append(results, CheckResult{
+			Category:      "Performance",
+			Name:          "RPC Memory Backpressure",
+			Description:   "RPC requests were delayed because the node is out of memory for networking",
+			CurrentValue:  fmt.Sprintf("%.0f requests blocked", totalBlocked),
+			ExpectedValue: "0 blocked",
+			Status:        SeverityWarning,
+			Remediation:   "The node is hitting 'rpc_server_listen_backlog' or general memory limits. This causes severe latency. Action: Check if 'memory_limit' or 'rpc_max_service_mem_bytes' is too low.",
+		})
+	}
+
 	return results
 }
 
