@@ -143,6 +143,10 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 	var partitionsToRecover float64
 	var ackAllRequests, ackLeaderRequests float64
 
+	// Memory Metrics
+	var freeMem, totalMem, reclaimableMem float64
+	var uptimeSeconds float64
+
 	for _, m := range metrics.Files {
 		for _, metric := range m {
 			switch metric.Name {
@@ -156,6 +160,16 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 					fetchRuntime += metric.Value
 				} else if group == "archival_upload" {
 					archivalUploadRuntime += metric.Value
+				}
+			case "vectorized_memory_free_bytes":
+				freeMem += metric.Value
+			case "vectorized_memory_allocated_bytes":
+				totalMem += (metric.Value + freeMem) // Rough total per shard
+			case "vectorized_storage_batch_cache_reclaimable_bytes":
+				reclaimableMem += metric.Value
+			case "vectorized_reactor_uptime":
+				if metric.Value > uptimeSeconds {
+					uptimeSeconds = metric.Value
 				}
 			case "vectorized_kafka_handler_latency_microseconds_count":
 				handler := metric.Labels["handler"]
@@ -245,6 +259,11 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 		}
 	} else {
 		report.WorkloadType = "Idle"
+	}
+
+	// 2.5 Reactor Spinning Detection (WorldQuant case)
+	if maxReactorUtil >= 100 && hasSchedulerMetrics && (produceRuntime+fetchRuntime < 100) {
+		report.Observations = append(report.Observations, "🚩 Potential Reactor Spinning Detected: Shard shows 100% utilization but very low scheduler runtime. This matches a known Seastar bug on certain OS/Environment combinations (e.g. RHEL8 + overprovisioned).")
 	}
 
 	// 3. Small Fetch Detection
@@ -381,7 +400,31 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 		report.Observations = append(report.Observations, fmt.Sprintf("Cluster in Recovery: %0.f partitions need recovery. Background traffic will be higher.", partitionsToRecover))
 	}
 
-	// 10. Demand vs Capacity Analysis (The "Upstream" Check)
+	// 10. Memory Analysis (Healthy Zero & Fragmentation)
+	if totalMem > 0 {
+		effectiveFree := freeMem + reclaimableMem
+		freeRatio := effectiveFree / totalMem
+
+		if freeRatio < 0.05 {
+			report.Observations = append(report.Observations, fmt.Sprintf("Critical: Low Effective Memory. Only %.1f%% of memory is available (including reclaimable cache). Risk of OOM.", freeRatio*100))
+			report.Recommendations = append(report.Recommendations, "Increase node memory or reduce shard count to give more head-room to each core.")
+		} else if freeMem < (128 * 1024 * 1024) { // Less than 128MB raw free
+			if reclaimableMem > (totalMem * 0.2) {
+				report.Observations = append(report.Observations, "Healthy Memory State: Raw free memory is low, but >20% is reclaimable from the Batch Cache (Normal Redpanda behavior).")
+			} else {
+				report.Observations = append(report.Observations, "Warning: Low Free Memory. Redpanda is operating with very little memory head-room.")
+			}
+		}
+
+		// Fragmentation heuristic
+		const oneWeek = 7 * 24 * 60 * 60
+		if uptimeSeconds > oneWeek && freeRatio > 0.2 && freeMem < (256 * 1024 * 1024) {
+			report.Observations = append(report.Observations, "ℹ️ High Fragmentation Risk: This node has been up for >7 days. Seastar memory may be fragmented, which can cause large allocations to fail even with high reclaimable memory.")
+			report.Recommendations = append(report.Recommendations, "If you see 'bad_alloc' errors despite high free memory, consider a rolling restart to defragment the heap.")
+		}
+	}
+
+	// 11. Demand vs Capacity Analysis (The "Upstream" Check)
 	if !report.IsCPUBound && !report.IsDiskBound && !report.IsNetworkBound {
 		// If cluster is healthy and utilization is low, check if it's effectively idle
 		if maxReactorUtil < 20.0 && produceCount > 0 {

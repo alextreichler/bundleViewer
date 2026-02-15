@@ -58,6 +58,15 @@ func AnalyzeReplication(
 		return insight
 	}
 
+	// 3. Detect Reconfiguration (Joint Consensus)
+	if strings.Contains(strings.ToLower(p.Status), "reconfig") {
+		return &models.PartitionInsight{
+			Summary:     "Partition is undergoing RECONFIGURATION (Joint Consensus). replicas are being moved or changed.",
+			Severity:    "info",
+			Remediation: "This is a normal part of partition movement. If it is stuck, check for disk space issues or network connectivity between the old and new replica sets.",
+		}
+	}
+
 	if p.Status != "under_replicated" {
 		return nil
 	}

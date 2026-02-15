@@ -44,4 +44,5 @@ type CpuProfileDetail struct {
 	UserBacktrace string  `json:"user_backtrace"`
 	Occurrences   int     `json:"occurrences"`
 	Percentage    float64 `json:"percentage"`
+	Insight       string  `json:"insight,omitempty"`
 }

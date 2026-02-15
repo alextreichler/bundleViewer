@@ -589,6 +589,15 @@
                     const row = document.createElement('tr');
                     row.style.borderBottom = '1px solid var(--border-color)';
                     
+                    let insightHtml = '';
+                    if (item.insight) {
+                        insightHtml = `
+                            <div style="background: rgba(245, 158, 11, 0.1); border-left: 4px solid #f59e0b; padding: 10px; margin-bottom: 10px; font-size: 0.9em; font-weight: 500;">
+                                ${item.insight}
+                            </div>
+                        `;
+                    }
+
                     const backtraceHtml = `<code style="display: block; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto; font-size: 0.85em;">${item.user_backtrace}</code>`;
 
                     const addresses = item.user_backtrace.split(' ').filter(p => p.startsWith('0x')).join(' ');
@@ -599,6 +608,7 @@
                         <td style="padding: 8px; vertical-align: top;">${item.percentage.toFixed(2)}%</td>
                         <td style="padding: 8px; vertical-align: top;">${item.occurrences}</td>
                         <td style="padding: 8px; vertical-align: top;">
+                            ${insightHtml}
                             ${backtraceHtml}
                             ${copyButton}
                         </td>

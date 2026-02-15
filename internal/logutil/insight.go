@@ -84,9 +84,9 @@ var CommonErrorKnowledgeBase = []LogInsight{
 	},
 	{
 		Pattern:     `reactor_stalled`,
-		Description: "Reactor Stalled. The main event loop was blocked for too long, causing high latency.",
+		Description: "Reactor Stalled. A task took too long before yielding to the scheduler.",
 		Severity:    "Warning",
-		Action:      "Check CPU usage, increase shard count, or investigate heavy requests blocking the thread.",
+		Action:      "Contributes to tail latency. Large stalls (>1.5s) can trigger leader stepdowns and cluster instability. Investigate CPU-bound synchronous loops.",
 	},
 	{
 		Pattern:     `authentication failed`,
@@ -183,6 +183,30 @@ var CommonErrorKnowledgeBase = []LogInsight{
 		Description: "Data Lake Translation Throttling (Iceberg Topics). The translation process (Kafka to Iceberg) is falling behind and the backlog exceeds the threshold.",
 		Severity:    "Warning",
 		Action:      "Check Iceberg destination health. Increase 'iceberg_throttle_backlog_size_ratio' if disk space allows. Check disk space usage.",
+	},
+	{
+		Pattern:     `pandaproxy::schema_registry::build_file_with_refs`,
+		Description: "Schema Registry Bottleneck. Heavy activity in schema normalization or reference building.",
+		Severity:    "Warning",
+		Action:      "Known issue in v25.1.1 (Fixed in v25.1.2). Occurs with large numbers of schema subjects.",
+	},
+	{
+		Pattern:     `raft::state_machine_manager::apply`,
+		Description: "Raft State Machine recovery loop.",
+		Severity:    "Warning",
+		Action:      "May indicate a known issue with state machine recovery policy. Check Redpanda version.",
+	},
+	{
+		Pattern:     `ssl_accept.*failed`,
+		Description: "SSL Handshake Failure / Churn.",
+		Severity:    "Warning",
+		Action:      "High frequency of SSL errors often indicates clients with repeat login attempts or missing connection pooling.",
+	},
+	{
+		Pattern:     `unclean_abort_reconfiguration`,
+		Description: "Unclean Partition Reconfiguration Abort. A partition movement was forcefully cancelled.",
+		Severity:    "Critical",
+		Action:      "DANGER: This operation involves data loss by truncating logs. Verify data consistency for the affected partition.",
 	},
 }
 

@@ -90,9 +90,46 @@ func (s *Server) apiCpuProfileDetailsHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	
+	// Add insights to each detail
+	for i := range details {
+		details[i].Insight = getProfileInsight(details[i].UserBacktrace, group)
+	}
+
 	if err := json.NewEncoder(w).Encode(details); err != nil {
 		s.logger.Error("Failed to encode cpu profile details", "error", err)
 	}
+}
+
+func getProfileInsight(backtrace, group string) string {
+	bt := strings.ToLower(backtrace)
+
+	// 1. Schema Registry Bottleneck (Stone-X case)
+	if strings.Contains(bt, "schema_registry") || strings.Contains(bt, "build_file_with_refs") {
+		return "⚠️ Schema Registry Bottleneck: Heavy activity detected in schema normalization or reference building. Known issue in v25.1.1 (Fixed in v25.1.2)."
+	}
+
+	// 2. State Machine Recovery (Akamai case)
+	if strings.Contains(bt, "state_machine_manager::apply") || strings.Contains(bt, "raft::state_machine") {
+		return "⚠️ Raft State Machine Loop: Time spent in STM apply may indicate a recovery loop or high state machine churn."
+	}
+
+	// 3. Segment Handling (Crane case)
+	if strings.Contains(bt, "persistent_size") && group == "main" {
+		return "⚠️ Segment Fragmentation: High overhead in main group during segment size calculation. Often indicates too many small segment files."
+	}
+
+	// 4. SSL/TLS Handshake churn
+	if strings.Contains(bt, "ssl_do_handshake") || strings.Contains(bt, "ssl_accept") {
+		return "ℹ️ SSL/TLS Churn: High frequency of TLS handshakes. Check for clients not using connection pooling."
+	}
+
+	// 5. Seastar Reactor spinning (WorldQuant case)
+	if strings.Contains(bt, "epoll_wait") || strings.Contains(bt, "reactor::run") {
+		return "ℹ️ Seastar Reactor Activity: If this shard is showing 100% utilization while idle, it may be hit by a known Seastar reactor spinning bug."
+	}
+
+	return ""
 }
 
 func (s *Server) getProfileVersionAndArch() (string, string, error) {
