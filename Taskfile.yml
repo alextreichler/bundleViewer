@@ -31,7 +31,7 @@ tasks:
     desc: "Builds the bundleViewer application for Linux (amd64)"
     deps: [build-native:linux]
     cmds:
-      - CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc,jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
+      - CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc,jsonv2 go build -tags "sqlite_fts5" -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
     silent: false
 
   build:macos:
@@ -40,9 +40,9 @@ tasks:
     cmds:
       - |
         if [ "$(uname)" = "Darwin" ]; then
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc,jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc,jsonv2 go build -tags "sqlite_fts5" -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
         else
-          CGO_ENABLED=1 CC="zig cc -target aarch64-macos" CXX="zig c++ -target aarch64-macos" GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc,jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+          CGO_ENABLED=1 CC="zig cc -target aarch64-macos" CXX="zig c++ -target aarch64-macos" GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc,jsonv2 go build -tags "sqlite_fts5" -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
         fi
     silent: false
 
@@ -52,7 +52,7 @@ tasks:
       - build-native:host
       - db:clean
     cmds:
-      - CGO_ENABLED=1 go run -ldflags "-X main.Version={{.TAG | default "dev"}}" cmd/webapp/main.go {{.CLI_ARGS}}
+      - CGO_ENABLED=1 go run -tags "sqlite_fts5" -ldflags "-X main.Version={{.TAG | default "dev"}}" cmd/webapp/main.go {{.CLI_ARGS}}
     silent: false
 
   clean:

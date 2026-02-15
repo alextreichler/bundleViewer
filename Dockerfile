@@ -18,10 +18,11 @@ COPY . .
 
 # Build the native Zig library and the Go webapp
 # We use CGO_ENABLED=1 and Zig as the C compiler
-RUN CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" 
-    zig build-lib -lc -O ReleaseFast -target x86_64-linux internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_linux_amd64.a 
-    && CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" 
-    go build -o bundleViewer cmd/webapp/main.go
+RUN CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" \
+    zig build-lib -lc -O ReleaseFast -target x86_64-linux internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_linux_amd64.a \
+    && CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" \
+    GOEXPERIMENT=greenteagc,jsonv2 \
+    go build -tags "sqlite_fts5" -o bundleViewer cmd/webapp/main.go
 
 # --- Run Stage ---
 FROM debian:bookworm-slim
