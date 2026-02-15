@@ -73,9 +73,34 @@ When running in memory-constrained containers, set `MEMORY_LIMIT` (e.g., `2GB`, 
 *   Automatically scale SQLite's `cache_size` and `mmap_size` to fit within the limit.
 *   Ensures performance remains high while preventing OOM (Out Of Memory) kills.
 
+## 5. Recommended Pod Resources
+Sizing your pod depends on the size of the Redpanda bundle.
+
+| Profile | RAM Limit | CPU Limit | Use Case |
+| :--- | :--- | :--- | :--- |
+| **Small** | `1Gi` | `1.0` | Small bundles (< 100MB compressed), quick checks. |
+| **Standard** | `4Gi` | `2.0` | Typical 500MB - 1GB bundles. **(Recommended)** |
+| **Heavy** | `8Gi` | `4.0` | Massive 2GB+ bundles with millions of log lines. |
+
+### ⚠️ Important: Ephemeral Storage
+Diagnostic bundles are highly compressed. A **1GB `.tar.gz`** can easily expand to **5GB – 10GB** of raw text once extracted. Always ensure your pod has enough `ephemeral-storage`.
+
+**Example Resource Block:**
+```yaml
+resources:
+  requests:
+    memory: "2Gi"
+    cpu: "1.0"
+    ephemeral-storage: "5Gi"
+  limits:
+    memory: "4Gi"
+    cpu: "2.0"
+    ephemeral-storage: "20Gi"
+```
+
 ---
 
-## 5. Configuration Reference
+## 6. Configuration Reference
 
 | Environment Variable | Description | Default |
 | :--- | :--- | :--- |

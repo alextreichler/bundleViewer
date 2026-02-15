@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -11,8 +12,12 @@ import (
 )
 
 type NodeConsensusStat struct {
-	Node  string
-	Count int
+	Node      string
+	Elections int
+	Stepdowns int
+	Timeouts  int
+	Moves     int
+	Total     int
 }
 
 type HotspotStat struct {
@@ -36,6 +41,7 @@ type ConsensusSummary struct {
 	NodeStats       []NodeConsensusStat
 	TopPartitions   []HotspotStat
 	TopTopics       []HotspotStat
+	Insights        []string
 }
 
 func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
@@ -62,16 +68,24 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 		summary.StartTime = events[len(events)-1].Timestamp
 	}
 
-	nodeCounts := make(map[string]int)
+	nodeData := make(map[string]*NodeConsensusStat)
 	ntpCounts := make(map[string]int)
 	topicCounts := make(map[string]int)
 
 	for _, ev := range events {
+		if _, ok := nodeData[ev.Node]; !ok {
+			nodeData[ev.Node] = &NodeConsensusStat{Node: ev.Node}
+		}
+		stat := nodeData[ev.Node]
+		stat.Total++
+
 		switch ev.Type {
 		case "Elected":
 			summary.ElectedCount++
+			stat.Elections++
 		case "Stepdown":
 			summary.StepdownCount++
+			stat.Stepdowns++
 			if ev.Reason != "" {
 				summary.StepdownReasons[ev.Reason]++
 				
@@ -82,13 +96,14 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		case "Timeout":
 			summary.TimeoutCount++
+			stat.Timeouts++
 		case "Move":
 			summary.MoveCount++
+			stat.Moves++
 		case "Health":
 			summary.HealthCount++
 		}
 
-		nodeCounts[ev.Node]++
 		if ev.NTP != "" {
 			ntpCounts[ev.NTP]++
 			// Extract topic from NTP (format: ns/topic/partition)
@@ -99,16 +114,34 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Prepare Node Stats
-	for node, count := range nodeCounts {
-		summary.NodeStats = append(summary.NodeStats, NodeConsensusStat{Node: node, Count: count})
+	// Finalize Node Stats
+	for _, stat := range nodeData {
+		summary.NodeStats = append(summary.NodeStats, *stat)
 	}
 	sort.Slice(summary.NodeStats, func(i, j int) bool {
-		return summary.NodeStats[i].Count > summary.NodeStats[j].Count
+		return summary.NodeStats[i].Total > summary.NodeStats[j].Total
 	})
 
 	if len(summary.NodeStats) > 0 {
 		summary.MostActiveNode = summary.NodeStats[0].Node
+		
+		// Logic 1: The Node Hotspot
+		if summary.NodeStats[0].Timeouts > 5 || summary.NodeStats[0].Elections > 10 {
+			summary.Insights = append(summary.Insights, fmt.Sprintf("🚩 **Node Hotspot (%s):** This node is experiencing significantly more consensus activity than others. High timeouts and elections suggest it may be the Cluster Controller or is under extreme disk/CPU pressure.", summary.MostActiveNode))
+		}
+	}
+
+	// Logic 2: Hostile Election Loop
+	if summary.ElectedCount > 0 && summary.StepdownCount > 0 {
+		diff := summary.ElectedCount - summary.StepdownCount
+		if diff < 5 && diff > -5 && summary.ElectedCount > 10 {
+			summary.Insights = append(summary.Insights, "🔄 **Election/Stepdown Loop:** The number of elections nearly matches stepdowns. This indicates 'Leadership Churn'—where nodes lose leadership due to transient stalls and immediately re-elect themselves once the stall clears.")
+		}
+	}
+
+	// Logic 3: RPC Timeouts
+	if summary.TimeoutCount > 0 {
+		summary.Insights = append(summary.Insights, fmt.Sprintf("⏰ **RPC Timeouts detected:** Found %d raft timeouts. These are leading indicators of metadata pressure or 'Stability Storms' caused by aggressive timeout settings (e.g. 100ms node_status_interval).", summary.TimeoutCount))
 	}
 
 	// Prepare Hotspot Stats

@@ -2376,7 +2376,7 @@ func checkIntegrityMetrics(metrics *models.MetricsBundle) []CheckResult {
 			CurrentValue:  fmt.Sprintf("%.0f parse errors, %.0f write errors", parseErrors, writeErrors),
 			ExpectedValue: "0 errors",
 			Status:        SeverityCritical,
-			Remediation:   "CRITICAL: Storage layer errors detected. This strongly indicates disk hardware failure, filesystem corruption, or OS-level IO errors. Investigate 'dmesg' and Redpanda logs immediately for 'segment_not_found' or 'checksum mismatch'.",
+			Remediation:   "CRITICAL: Storage layer errors detected. This strongly indicates disk hardware failure, filesystem corruption (e.g. XFS errors), or OS-level IO timeout. Investigate 'dmesg' for 'I/O error' and Redpanda logs for 'segment_not_found', 'batch_parse_error', or 'checksum mismatch'.",
 		})
 	}
 
@@ -2388,7 +2388,7 @@ func checkIntegrityMetrics(metrics *models.MetricsBundle) []CheckResult {
 			CurrentValue:  fmt.Sprintf("%.0f indices corrupted", corruptCompaction),
 			ExpectedValue: "0 corrupted",
 			Status:        SeverityWarning,
-			Remediation:   "Redpanda has to rebuild corrupted compaction indices on-the-fly, which consumes significant CPU. Check for disk stalls or abrupt shutdowns that may have caused the corruption.",
+			Remediation:   "Redpanda has to rebuild corrupted compaction indices on-the-fly, which consumes significant CPU (often visible as high runtime in the 'main' scheduler group) and disk IO. This usually occurs after abrupt shutdowns, SIGKILLs, or Kubernetes liveness probe timeouts.\n\nAction: Search the Logs for 'Rebuilding index file' to identify the affected segments. Note: Frequent rebuilding can be caused by pod restart loops.",
 		})
 	}
 
@@ -2418,7 +2418,7 @@ func checkMemoryReclaimPressure(metrics *models.MetricsBundle) []CheckResult {
 			CurrentValue:  fmt.Sprintf("%.0f total reclaims", totalReclaims),
 			ExpectedValue: "Low reclaim activity",
 			Status:        SeverityWarning,
-			Remediation:   "Frequent reclaims indicate the node is operating at the edge of its memory limit. This causes 'cache thrashing' and increases disk IO as data is evicted and re-read. Action: Increase node memory or decrease shard count.",
+			Remediation:   "Frequent reclaims indicate the node is operating at the edge of its memory limit. This causes 'cache thrashing', where data is evicted then immediately re-read from disk, killing performance. Action: Increase node memory, decrease '--smp' (shards), or check for memory-heavy producers.",
 		})
 	}
 

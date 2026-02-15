@@ -14,7 +14,7 @@ import (
 
 	"github.com/alextreichler/bundleViewer/internal/logutil"
 	"github.com/alextreichler/bundleViewer/internal/models"
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type SQLiteStore struct {
@@ -31,7 +31,7 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool, memoryLimit in
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000")
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=10000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -921,7 +921,8 @@ func (s *SQLiteStore) GetGlobalRaftEvents() ([]models.RaftTimelineEvent, error) 
 	defer s.mu.RUnlock()
 
 	// Broad search for Raft and configuration changes across all NTPs
-	searchQuery := "(leader OR stepdown OR timeout OR term OR reconfiguration OR moving OR \"is down\")"
+	// Added "transferring leadership" and "begin_reconfiguration" for graceful moves
+	searchQuery := "(leader OR stepdown OR timeout OR term OR reconfiguration OR moving OR \"is down\" OR \"transferring leadership\")"
 	ftsQuery := buildFTSQuery(searchQuery)
 
 	query := `
@@ -970,9 +971,9 @@ func (s *SQLiteStore) GetGlobalRaftEvents() ([]models.RaftTimelineEvent, error) 
 			if matches := reasonRegex.FindStringSubmatch(msg); len(matches) > 1 {
 				event.Reason = matches[1]
 			}
-		} else if strings.Contains(lowerMsg, "timeout") || strings.Contains(lowerMsg, "error code: 10") {
+		} else if strings.Contains(lowerMsg, "timeout") || strings.Contains(lowerMsg, "error code: 10") || strings.Contains(lowerMsg, "raft::errc::timeout") {
 			event.Type = "Timeout"
-		} else if strings.Contains(lowerMsg, "moving") || strings.Contains(lowerMsg, "reconfiguration") {
+		} else if strings.Contains(lowerMsg, "moving") || strings.Contains(lowerMsg, "reconfiguration") || strings.Contains(lowerMsg, "transferring leadership") {
 			event.Type = "Move"
 		} else if strings.Contains(lowerMsg, "is down") {
 			event.Type = "Health"
