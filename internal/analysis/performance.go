@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/alextreichler/bundleViewer/internal/models"
 )
@@ -18,7 +19,7 @@ type PerformanceReport struct {
 }
 
 // AnalyzePerformance evaluates the metrics bundle against known performance heuristics
-func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) PerformanceReport {
+func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData, selfTest []models.SelfTestNodeResult) PerformanceReport {
 	report := PerformanceReport{
 		Recommendations: []string{},
 		Observations:    []string{},
@@ -145,6 +146,8 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 
 	// Memory Metrics
 	var freeMem, totalMem, reclaimableMem float64
+	var availableLowWater float64
+	var hasLowWater bool
 	var uptimeSeconds float64
 
 	for _, m := range metrics.Files {
@@ -161,12 +164,17 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 				} else if group == "archival_upload" {
 					archivalUploadRuntime += metric.Value
 				}
-			case "vectorized_memory_free_bytes":
+			case "vectorized_memory_free_bytes", "redpanda_memory_free_memory":
 				freeMem += metric.Value
-			case "vectorized_memory_allocated_bytes":
+			case "vectorized_memory_allocated_bytes", "redpanda_memory_allocated_memory":
 				totalMem += (metric.Value + freeMem) // Rough total per shard
-			case "vectorized_storage_batch_cache_reclaimable_bytes":
+			case "vectorized_storage_batch_cache_reclaimable_bytes", "redpanda_storage_batch_cache_reclaimable_bytes":
 				reclaimableMem += metric.Value
+			case "redpanda_memory_available_memory_low_water_mark":
+				if !hasLowWater || metric.Value < availableLowWater {
+					availableLowWater = metric.Value
+					hasLowWater = true
+				}
 			case "vectorized_reactor_uptime":
 				if metric.Value > uptimeSeconds {
 					uptimeSeconds = metric.Value
@@ -422,9 +430,40 @@ func AnalyzePerformance(metrics *models.MetricsBundle, sar models.SarData) Perfo
 			report.Observations = append(report.Observations, "ℹ️ High Fragmentation Risk: This node has been up for >7 days. Seastar memory may be fragmented, which can cause large allocations to fail even with high reclaimable memory.")
 			report.Recommendations = append(report.Recommendations, "If you see 'bad_alloc' errors despite high free memory, consider a rolling restart to defragment the heap.")
 		}
+
+		if hasLowWater && availableLowWater < (64 * 1024 * 1024) {
+			report.Observations = append(report.Observations, "🚩 Historical Memory Pressure: The node's available memory low water mark reached near-zero. This confirms a past memory spike that almost caused an OOM.")
+		}
 	}
 
-	// 11. Demand vs Capacity Analysis (The "Upstream" Check)
+	// 11. Hardware Validation (The 4/30 Rule)
+	for _, nr := range selfTest {
+		for _, r := range nr.Results {
+			if r.Type != "disk" {
+				continue
+			}
+			
+			// 4MB/s small block check
+			if strings.Contains(strings.ToLower(r.Name), "4kb") {
+				throughputMB := float64(r.Throughput) / (1024 * 1024)
+				if throughputMB < 4.0 {
+					report.Observations = append(report.Observations, fmt.Sprintf("❌ Unsupported Hardware: Small block write throughput (%.2f MB/s) is below the minimum threshold (4.0 MB/s).", throughputMB))
+					report.Recommendations = append(report.Recommendations, "Physical disk performance is insufficient for Redpanda production support. Upgrade your storage volume.")
+				}
+			}
+			
+			// 30MB/s medium block check
+			if strings.Contains(strings.ToLower(r.Name), "16kb") {
+				throughputMB := float64(r.Throughput) / (1024 * 1024)
+				if throughputMB < 30.0 {
+					report.Observations = append(report.Observations, fmt.Sprintf("❌ Unsupported Hardware: Medium block write throughput (%.2f MB/s) is below the minimum threshold (30.0 MB/s).", throughputMB))
+					report.Recommendations = append(report.Recommendations, "Physical disk performance is insufficient for Redpanda production support. Upgrade your storage volume.")
+				}
+			}
+		}
+	}
+
+	// 12. Demand vs Capacity Analysis (The "Upstream" Check)
 	if !report.IsCPUBound && !report.IsDiskBound && !report.IsNetworkBound {
 		// If cluster is healthy and utilization is low, check if it's effectively idle
 		if maxReactorUtil < 20.0 && produceCount > 0 {

@@ -353,7 +353,7 @@ func (s *Server) apiFullMetricsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	perfMetrics.Files["snapshot"] = allMetricList
-	perfReport := analysis.AnalyzePerformance(perfMetrics, s.cachedData.SarData)
+	perfReport := analysis.AnalyzePerformance(perfMetrics, s.cachedData.SarData, s.cachedData.SelfTestResults)
 
 	baseData := s.newBasePageData("Metrics")
 

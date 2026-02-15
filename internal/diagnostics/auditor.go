@@ -1728,7 +1728,7 @@ func checkBottlenecks(data *cache.CachedData, s store.Store) []CheckResult {
 	metricsBundle.Files["store_metrics"] = allMetrics
 
 	// Run Analysis
-	report := analysis.AnalyzePerformance(metricsBundle, data.SarData)
+	report := analysis.AnalyzePerformance(metricsBundle, data.SarData, data.SelfTestResults)
 
 	// Convert Report to CheckResults
 
