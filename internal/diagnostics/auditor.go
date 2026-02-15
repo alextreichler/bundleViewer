@@ -137,6 +137,26 @@ func Audit(data *cache.CachedData, s store.Store) DiagnosticsReport {
 	// 32. Socket-level Health (ss)
 	results = append(results, checkSocketHealth(data)...)
 
+	// 33. Advanced Metrics-based Integrity and Pressure Checks
+	// Get some samples to check for errors/reclaims
+	integrityBundle := &models.MetricsBundle{Files: map[string][]models.PrometheusMetric{"integrity": {}}}
+	if metrics, err := s.GetMetrics("vectorized_storage_log_batch_parse_errors", nil, time.Time{}, time.Time{}, 0, 0); err == nil {
+		for _, m := range metrics { integrityBundle.Files["integrity"] = append(integrityBundle.Files["integrity"], *m) }
+	}
+	if metrics, err := s.GetMetrics("vectorized_storage_log_batch_write_errors", nil, time.Time{}, time.Time{}, 0, 0); err == nil {
+		for _, m := range metrics { integrityBundle.Files["integrity"] = append(integrityBundle.Files["integrity"], *m) }
+	}
+	if metrics, err := s.GetMetrics("vectorized_storage_log_corrupted_compaction_indices", nil, time.Time{}, time.Time{}, 0, 0); err == nil {
+		for _, m := range metrics { integrityBundle.Files["integrity"] = append(integrityBundle.Files["integrity"], *m) }
+	}
+	results = append(results, checkIntegrityMetrics(integrityBundle)...)
+
+	pressureBundle := &models.MetricsBundle{Files: map[string][]models.PrometheusMetric{"pressure": {}}}
+	if metrics, err := s.GetMetrics("vectorized_memory_reclaims_operations", nil, time.Time{}, time.Time{}, 0, 0); err == nil {
+		for _, m := range metrics { pressureBundle.Files["pressure"] = append(pressureBundle.Files["pressure"], *m) }
+	}
+	results = append(results, checkMemoryReclaimPressure(pressureBundle)...)
+
 	return DiagnosticsReport{Results: results}
 }
 
@@ -2328,6 +2348,80 @@ func checkDataDirPartition(data *cache.CachedData) []CheckResult {
 		}
 	}
 	
+	return results
+}
+
+func checkIntegrityMetrics(metrics *models.MetricsBundle) []CheckResult {
+	var results []CheckResult
+
+	var parseErrors, writeErrors, corruptCompaction float64
+	for _, m := range metrics.Files {
+		for _, metric := range m {
+			switch metric.Name {
+			case "vectorized_storage_log_batch_parse_errors":
+				parseErrors += metric.Value
+			case "vectorized_storage_log_batch_write_errors":
+				writeErrors += metric.Value
+			case "vectorized_storage_log_corrupted_compaction_indices":
+				corruptCompaction += metric.Value
+			}
+		}
+	}
+
+	if parseErrors > 0 || writeErrors > 0 {
+		results = append(results, CheckResult{
+			Category:      "Data Integrity",
+			Name:          "Log Storage Errors",
+			Description:   "Redpanda encountered errors while parsing or writing log batches to disk",
+			CurrentValue:  fmt.Sprintf("%.0f parse errors, %.0f write errors", parseErrors, writeErrors),
+			ExpectedValue: "0 errors",
+			Status:        SeverityCritical,
+			Remediation:   "CRITICAL: Storage layer errors detected. This strongly indicates disk hardware failure, filesystem corruption, or OS-level IO errors. Investigate 'dmesg' and Redpanda logs immediately for 'segment_not_found' or 'checksum mismatch'.",
+		})
+	}
+
+	if corruptCompaction > 0 {
+		results = append(results, CheckResult{
+			Category:      "Storage",
+			Name:          "Compaction Index Corruption",
+			Description:   "One or more log compaction indices are corrupted",
+			CurrentValue:  fmt.Sprintf("%.0f indices corrupted", corruptCompaction),
+			ExpectedValue: "0 corrupted",
+			Status:        SeverityWarning,
+			Remediation:   "Redpanda has to rebuild corrupted compaction indices on-the-fly, which consumes significant CPU. Check for disk stalls or abrupt shutdowns that may have caused the corruption.",
+		})
+	}
+
+	return results
+}
+
+func checkMemoryReclaimPressure(metrics *models.MetricsBundle) []CheckResult {
+	var results []CheckResult
+
+	// vectorized_memory_reclaims_operations is a counter
+	// Since we likely have only one or two snapshots, we look at the absolute value or existence
+	var totalReclaims float64
+	for _, m := range metrics.Files {
+		for _, metric := range m {
+			if metric.Name == "vectorized_memory_reclaims_operations" || metric.Name == "redpanda_memory_reclaims_operations" {
+				totalReclaims += metric.Value
+			}
+		}
+	}
+
+	// In a single snapshot, if reclaims are > 1000, the node has been struggling for a while
+	if totalReclaims > 10000 {
+		results = append(results, CheckResult{
+			Category:      "Performance",
+			Name:          "High Memory Reclaim Rate",
+			Description:   "Redpanda is frequently evicting data from its batch cache to satisfy memory requests",
+			CurrentValue:  fmt.Sprintf("%.0f total reclaims", totalReclaims),
+			ExpectedValue: "Low reclaim activity",
+			Status:        SeverityWarning,
+			Remediation:   "Frequent reclaims indicate the node is operating at the edge of its memory limit. This causes 'cache thrashing' and increases disk IO as data is evicted and re-read. Action: Increase node memory or decrease shard count.",
+		})
+	}
+
 	return results
 }
 
