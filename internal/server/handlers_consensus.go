@@ -30,6 +30,7 @@ type ConsensusSummary struct {
 	MostActiveNode  string
 	MostActiveNTP   string
 	StepdownReasons map[string]int
+	StepdownByNode  map[string]map[string]int // Reason -> Node -> Count
 	StartTime       time.Time
 	EndTime         time.Time
 	NodeStats       []NodeConsensusStat
@@ -53,6 +54,7 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 	summary := ConsensusSummary{
 		TotalEvents:     len(events),
 		StepdownReasons: make(map[string]int),
+		StepdownByNode:  make(map[string]map[string]int),
 	}
 
 	if len(events) > 0 {
@@ -72,6 +74,11 @@ func (s *Server) consensusHandler(w http.ResponseWriter, r *http.Request) {
 			summary.StepdownCount++
 			if ev.Reason != "" {
 				summary.StepdownReasons[ev.Reason]++
+				
+				if summary.StepdownByNode[ev.Reason] == nil {
+					summary.StepdownByNode[ev.Reason] = make(map[string]int)
+				}
+				summary.StepdownByNode[ev.Reason][ev.Node]++
 			}
 		case "Timeout":
 			summary.TimeoutCount++

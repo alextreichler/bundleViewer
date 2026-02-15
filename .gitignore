@@ -23,3 +23,7 @@ k8s/
 # Exclude generated analysis files
 potential_logs.csv
 LOGS.md
+
+# Zig build artifacts
+internal/parser/native/*.a
+internal/parser/native/*.o

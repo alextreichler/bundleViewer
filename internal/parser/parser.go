@@ -508,6 +508,30 @@ func (lp *LogParser) parseFile(filePath string, batchChan chan<- []*models.LogEn
 		nodeName = "redpanda"
 	}
 
+	isCSV := strings.HasSuffix(filePath, ".csv")
+	if !isCSV {
+		// Try Zig accelerator first
+		f, err := os.Open(filePath)
+		if err == nil {
+			bom := make([]byte, 2)
+			isUTF16 := false
+			if n, err := f.Read(bom); err == nil && n == 2 {
+				if bom[0] == 0xff && bom[1] == 0xfe {
+					isUTF16 = true
+				}
+			}
+			f.Close()
+
+			if !isUTF16 {
+				err := lp.parseFileZig(filePath, batchChan)
+				if err == nil {
+					return nil
+				}
+				slog.Warn("Zig parser failed, falling back to standard parser", "path", filePath, "error", err)
+			}
+		}
+	}
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %w", filePath, err)
@@ -533,7 +557,6 @@ func (lp *LogParser) parseFile(filePath string, batchChan chan<- []*models.LogEn
 
 	var currentEntry *models.LogEntry
 	lineNumber := 0
-	isCSV := strings.HasSuffix(filePath, ".csv")
 
 	for scanner.Scan() {
 		lineNumber++

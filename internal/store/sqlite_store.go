@@ -38,14 +38,16 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore,
 
 	// Performance Optimizations
 	pragmas := []string{
-		"PRAGMA journal_mode=OFF;",      // No rollback journal (fastest, risky)
-		"PRAGMA synchronous=OFF;",       // Don't wait for disk flush
-		"PRAGMA locking_mode=EXCLUSIVE;", // exclusive access for speed
+		"PRAGMA journal_mode=WAL;",      // Better concurrency
+		"PRAGMA synchronous=NORMAL;",    // Good balance of safety and speed
+		"PRAGMA locking_mode=EXCLUSIVE;", // Exclusive access for speed
 		"PRAGMA page_size=65536;",       // 64KB page size
 		"PRAGMA temp_store=MEMORY;",     // Temp tables in RAM
 		"PRAGMA cache_size=-500000;",    // ~500MB cache
-		"PRAGMA mmap_size=8000000000;",  // Memory map up to 8GB
+		"PRAGMA mmap_size=30000000000;", // Memory map up to 30GB (if available)
 		"PRAGMA count_changes=OFF;",     // Don't count changes
+		"PRAGMA threads=4;",             // Parallel query execution
+		"PRAGMA secure_delete=OFF;",     // Faster deletes
 	}
 
 	for _, p := range pragmas {
@@ -54,8 +56,10 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore,
 		}
 	}
 
-	// FORCE single connection to avoid SQLITE_BUSY
-	db.SetMaxOpenConns(1)
+	// Allow multiple readers in WAL mode
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
 
 	slog.Info("SQLite Store Initialized", "ptr", fmt.Sprintf("%p", db))
 	store := &SQLiteStore{db: db}

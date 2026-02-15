@@ -7,24 +7,52 @@ tasks:
       - build:linux
       - build:macos
 
+  build-native:linux:
+    desc: "Compile the Zig parsing engine for Linux (amd64)"
+    cmds:
+      - zig build-lib -lc -O ReleaseFast -target x86_64-linux internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_linux_amd64.a
+
+  build-native:macos:
+    desc: "Compile the Zig parsing engine for macOS (arm64)"
+    cmds:
+      - zig build-lib -lc -O ReleaseFast -target aarch64-macos internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_darwin_arm64.a
+
+  build-native:host:
+    desc: "Compile the Zig parsing engine for the host"
+    cmds:
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          zig build-lib -lc -O ReleaseFast internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_darwin_arm64.a
+        else
+          zig build-lib -lc -O ReleaseFast internal/parser/native/parser.zig -femit-bin=internal/parser/native/libparser_linux_amd64.a
+        fi
+
   build:linux:
     desc: "Builds the bundleViewer application for Linux (amd64)"
+    deps: [build-native:linux]
     cmds:
-      - GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
+      - CGO_ENABLED=1 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" GOOS=linux GOARCH=amd64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-linux-amd64 cmd/webapp/main.go
     silent: false
 
   build:macos:
     desc: "Builds the bundleViewer application for macOS (arm64)"
+    deps: [build-native:macos]
     cmds:
-      - GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+        else
+          CGO_ENABLED=1 CC="zig cc -target aarch64-macos" CXX="zig c++ -target aarch64-macos" GOOS=darwin GOARCH=arm64 GOEXPERIMENT=greenteagc GOEXPERIMENT=jsonv2 go build -ldflags "-X main.Version={{.TAG | default "dev"}}" -o dist/bundleViewer-darwin-arm64 cmd/webapp/main.go
+        fi
     silent: false
 
   run:
     desc: "Runs the bundleViewer application. Usage: task run -- -bundlePath /path/to/bundle"
     deps:
+      - build-native:host
       - db:clean
     cmds:
-      - go run -ldflags "-X main.Version={{.TAG | default "dev"}}" cmd/webapp/main.go {{.CLI_ARGS}}
+      - CGO_ENABLED=1 go run -ldflags "-X main.Version={{.TAG | default "dev"}}" cmd/webapp/main.go {{.CLI_ARGS}}
     silent: false
 
   clean:
