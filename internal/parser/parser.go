@@ -23,27 +23,27 @@ import (
 	"github.com/alextreichler/bundleViewer/internal/store"
 )
 
-// parseSizeToBytes converts a human-readable size string (e.g., "1.2M", "3G", "500K") to bytes.
-func parseSizeToBytes(sizeStr string) (int64, error) {
+// ParseSizeToBytes converts a human-readable size string (e.g., "1.2M", "3G", "500K") to bytes.
+func ParseSizeToBytes(sizeStr string) (int64, error) {
 	sizeStr = strings.TrimSpace(sizeStr)
-	if sizeStr == "0" {
+	if sizeStr == "0" || sizeStr == "" {
 		return 0, nil
 	}
 
 	var multiplier int64 = 1
 
-	if strings.HasSuffix(sizeStr, "K") {
+	if strings.HasSuffix(sizeStr, "K") || strings.HasSuffix(sizeStr, "KB") {
 		multiplier = 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "K")
-	} else if strings.HasSuffix(sizeStr, "M") {
+		sizeStr = strings.TrimSuffix(strings.TrimSuffix(sizeStr, "B"), "K")
+	} else if strings.HasSuffix(sizeStr, "M") || strings.HasSuffix(sizeStr, "MB") {
 		multiplier = 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "M")
-	} else if strings.HasSuffix(sizeStr, "G") {
+		sizeStr = strings.TrimSuffix(strings.TrimSuffix(sizeStr, "B"), "M")
+	} else if strings.HasSuffix(sizeStr, "G") || strings.HasSuffix(sizeStr, "GB") {
 		multiplier = 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "G")
-	} else if strings.HasSuffix(sizeStr, "T") {
+		sizeStr = strings.TrimSuffix(strings.TrimSuffix(sizeStr, "B"), "G")
+	} else if strings.HasSuffix(sizeStr, "T") || strings.HasSuffix(sizeStr, "TB") {
 		multiplier = 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "T")
+		sizeStr = strings.TrimSuffix(strings.TrimSuffix(sizeStr, "B"), "T")
 	} else if strings.HasSuffix(sizeStr, "B") { // Handle explicit 'B' for bytes
 		sizeStr = strings.TrimSuffix(sizeStr, "B")
 	}
@@ -760,7 +760,7 @@ func ParseDuOutput(bundlePath string, logsOnly bool) ([]models.DuEntry, error) {
 			continue
 		}
 
-		size, err := parseSizeToBytes(parts[0])
+		size, err := ParseSizeToBytes(parts[0])
 		if err != nil {
 			if !logsOnly {
 				slog.Warn("Failed to parse size for du.txt entry", "line", line, "error", err)

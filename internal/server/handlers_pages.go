@@ -39,6 +39,11 @@ type HomePageData struct {
 }
 
 func (s *Server) setupHandler(w http.ResponseWriter, r *http.Request) {
+	if s.oneShot && s.bundlePath != "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
 	buf := builderPool.Get().(*strings.Builder)
 	buf.Reset()
 	defer builderPool.Put(buf)

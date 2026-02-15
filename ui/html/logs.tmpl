@@ -39,14 +39,15 @@
 		}
 		
 		.log-table th {
-			background-color: var(--th-bg);
+			background-color: var(--header-bg-color);
 			color: var(--text-color);
 			text-align: left;
 			padding: 12px;
-			border-bottom: 2px solid #ddd;
+			border-bottom: 2px solid var(--border-color);
 			position: sticky;
-			top: 195px; /* Offset to appear below sticky filters. Adjusted for approximate height. */
+			top: 210px; /* Offset to appear below sticky filters. */
 			z-index: 90;
+            box-shadow: 0 2px 2px -1px rgba(0,0,0,0.1);
 		}
 		
 		.log-table td {
@@ -159,7 +160,7 @@
 		<!-- Section 2: Search & Actions -->
 		<div class="filter-row secondary-controls">
 			<div class="search-container">
-				<input type="text" id="query-input" placeholder="Search logs... (e.g. 'error NOT timeout' or 'pod-name')" value="{{.Filter.Search}}">
+				<input type="text" id="query-input" placeholder="Search logs... [/ to focus] (e.g. 'error NOT timeout' or 'pod-name')" value="{{.Filter.Search}}">
 				<div class="help-container">
 					<span class="help-icon">?</span>
 					<div class="help-tooltip">
@@ -396,13 +397,13 @@
 	<table class="log-table">
 		<thead>
 			<tr>
-				<th style="width: 150px;">Timestamp</th>
-				<th style="width: 60px;">Level</th>
-				<th style="width: 100px;">Node</th>
-				<th style="width: 80px;">Shard</th>
+				<th class="col-timestamp">Timestamp</th>
+				<th class="col-level">Level</th>
+				<th class="col-node">Node</th>
+				<th class="col-shard">Shard</th>
 				<th style="width: 120px;">Component</th>
 				<th>Message</th>
-				<th style="width: 80px;">Actions</th>
+				<th style="width: 120px;">Actions</th>
 			</tr>
 		</thead>
 		<tbody>
@@ -410,8 +411,9 @@
 		</tbody>
 	</table>
 
-	<div id="loading-indicator" style="text-align: center; padding: 20px;">
-		<!-- Loading text will be dynamically added by JavaScript -->
+	<div id="loading-indicator" style="text-align: center; padding: 40px; color: var(--text-color-muted); font-weight: 500;">
+		<div id="local-spinner" class="htmx-indicator" style="display:inline-block; margin-right:10px; width: 20px; height: 20px; border-width: 3px;"></div>
+        <span>Initializing log stream...</span>
 	</div>
 
 	<style>

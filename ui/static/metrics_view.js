@@ -68,7 +68,12 @@ window.loadMetricData = async function() {
     if (!metricName) return;
 
     const loading = document.getElementById('explorer-loading');
-    if (loading) loading.style.display = 'flex';
+    const plotButton = document.getElementById('plot-button');
+    const plotSpinner = document.getElementById('plot-spinner');
+    
+    if (loading) loading.classList.add('htmx-request');
+    if (plotButton) plotButton.disabled = true;
+    if (plotSpinner) plotSpinner.classList.add('htmx-request');
 
     try {
         const response = await fetch(`/api/metrics/data?metric=${encodeURIComponent(metricName)}`);
@@ -79,7 +84,9 @@ window.loadMetricData = async function() {
         console.error('Error fetching metric data:', error);
         alert('Failed to load metric data.');
     } finally {
-        if (loading) loading.style.display = 'none';
+        if (loading) loading.classList.remove('htmx-request');
+        if (plotButton) plotButton.disabled = false;
+        if (plotSpinner) plotSpinner.classList.remove('htmx-request');
     }
 };
 

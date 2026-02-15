@@ -326,42 +326,80 @@ table {
     margin-bottom: 1.5rem;
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
-    overflow: hidden;
+    /* Remove overflow: hidden to allow sticky headers to work */
+}
+
+.table-container {
+    width: 100%;
+    overflow-x: auto;
+    max-height: 80vh; /* Allow vertical scroll within container */
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
 }
 
 th, td {
     padding: 0.75rem 1rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
-    word-break: break-word; /* Prevent long strings from stretching tables */
-}
-
-.table-container {
-    width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin-bottom: 1.5rem;
 }
 
 th {
-    background-color: var(--bg-color);
+    background-color: var(--header-bg-color);
     color: var(--text-color);
     font-weight: 600;
     font-size: 0.875rem;
     white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
-th:last-child, td:last-child {
-    border-right: none;
-}
-
-tr:last-child td {
-    border-bottom: none;
+/* Zebra Striping */
+tr:nth-child(even) td {
+    background-color: color-mix(in srgb, var(--text-color) 2%, transparent);
 }
 
 tr:hover td {
-    background-color: color-mix(in srgb, var(--primary-color) 5%, transparent);
+    background-color: color-mix(in srgb, var(--primary-color) 8%, transparent) !important;
 }
+
+/* Log Content Styling */
+.log-message-cell {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    max-width: 0; /* Important for ellipsis/wrapping in flex/table layouts */
+    width: 100%;
+}
+
+.log-message-container {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.log-message-container.expanded {
+    display: block;
+    -webkit-line-clamp: initial;
+    overflow: visible;
+}
+
+.log-message-container:hover {
+    color: var(--primary-color);
+}
+
+/* Metadata Columns */
+.col-timestamp { width: 180px; white-space: nowrap; font-family: var(--font-mono); font-size: 0.8rem; }
+.col-level { width: 80px; text-align: center; }
+.col-node { width: 120px; font-weight: 500; }
+.col-shard { width: 60px; text-align: center; font-family: var(--font-mono); }
+
 
 tr:target td {
     background-color: color-mix(in srgb, var(--primary-color) 15%, transparent);
@@ -393,6 +431,72 @@ tr:target td {
 .log-level-WARN { color: #f59e0b; }
 .log-level-INFO { color: #10b981; }
 .log-level-DEBUG { color: #3b82f6; }
+
+/* Log Level Row Coloring */
+tr.severity-error td { background-color: rgba(239, 68, 68, 0.05) !important; }
+tr.severity-warn td { background-color: rgba(245, 158, 11, 0.05) !important; }
+tr.severity-error:hover td { background-color: rgba(239, 68, 68, 0.1) !important; }
+tr.severity-warn:hover td { background-color: rgba(245, 158, 11, 0.1) !important; }
+
+/* Dark mode overrides for row coloring */
+[data-theme="dark"] tr.severity-error td, [data-theme="ultra-dark"] tr.severity-error td { background-color: rgba(239, 68, 68, 0.1) !important; }
+[data-theme="dark"] tr.severity-warn td, [data-theme="ultra-dark"] tr.severity-warn td { background-color: rgba(245, 158, 11, 0.1) !important; }
+
+/* Empty States */
+.empty-state {
+    padding: 3rem;
+    text-align: center;
+    color: var(--text-color-muted);
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius);
+    margin: 2rem 0;
+}
+
+.empty-state i {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 1rem;
+}
+
+/* Localized HTMX Indicators */
+.htmx-indicator {
+    display: none;
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+}
+.htmx-request .htmx-indicator {
+    display: inline-block;
+    opacity: 1;
+}
+.htmx-request.htmx-indicator {
+    display: inline-block;
+    opacity: 1;
+}
+
+/* Search Bar Focus Indicator */
+input#query-input:focus {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-color) 25%, transparent);
+}
+
+/* Pin Note Styles */
+.pin-note-area {
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(0,0,0,0.03);
+    border-radius: 4px;
+    border-left: 3px solid var(--primary-color);
+    font-size: 0.85rem;
+}
+
+.pin-note-input {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-color);
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    margin-top: 5px;
+}
 
 mark {
     background-color: #fef08a; /* Yellow 200 */

@@ -69,6 +69,15 @@ func GzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ActivityMiddleware updates the last heartbeat on every request
+func (s *Server) ActivityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Update heartbeat timestamp
+		atomic.StoreInt64(&s.lastHeartbeat, time.Now().Unix())
+		next.ServeHTTP(w, r)
+	})
+}
+
 const (
 	maxInitialRenderDepth = 2   // Only render 2 levels deep initially
 	maxInitialRenderItems = 25  // Reduced from 50
@@ -89,6 +98,7 @@ type BasePageData struct {
 	Sessions        map[string]*BundleSession
 	ActivePath      string
 	LogsOnly        bool
+	OneShot         bool
 	CurrentVersion  string
 	LatestVersion   string
 	UpdateAvailable bool
@@ -142,6 +152,8 @@ type Server struct {
 	currentVersion      string
 	latestVersion       string
 	updateAvailable     bool
+	oneShot             bool
+	memoryLimit         int64
 }
 
 func (s *Server) SetDataDir(path string) {
@@ -171,6 +183,7 @@ func (s *Server) newBasePageData(active string) BasePageData {
 		Sessions:        s.sessions,
 		ActivePath:      s.activePath,
 		LogsOnly:        s.logsOnly,
+		OneShot:         s.oneShot,
 		CurrentVersion:  s.currentVersion,
 		LatestVersion:   s.latestVersion,
 		UpdateAvailable: s.updateAvailable,
@@ -269,7 +282,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker, currentVersion, latestVersion, authToken string, shutdownTimeout, inactivityTimeout time.Duration) (http.Handler, error) { // Accept both
+func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger *slog.Logger, logsOnly bool, persist bool, progress *models.ProgressTracker, currentVersion, latestVersion, authToken string, shutdownTimeout, inactivityTimeout time.Duration, memoryLimit int64, oneShot bool) (http.Handler, error) { // Accept both
 	funcMap := template.FuncMap{
 		"renderData": func(key string, data interface{}) template.HTML {
 			return renderDataLazy(key, "", data, 0, 0)
@@ -620,6 +633,8 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 		currentVersion:      currentVersion,
 		latestVersion:       latestVersion,
 		updateAvailable:     latestVersion != "" && latestVersion != currentVersion,
+		oneShot:             oneShot,
+		memoryLimit:         memoryLimit,
 	}
 
 	if server.progress == nil {
@@ -691,9 +706,10 @@ func New(bundlePath string, cachedData *cache.CachedData, s store.Store, logger 
 	mux.HandleFunc("/api/cpu/download", server.apiCpuDownloadHandler)
 
 	// Wrap the mux with middlewares
-	// Order: Auth -> Gzip -> Security -> Mux
+	// Order: Auth -> Gzip -> Activity -> Security -> Mux
 	var handler http.Handler = mux
 	handler = SecurityHeadersMiddleware(handler)
+	handler = server.ActivityMiddleware(handler)
 	handler = GzipMiddleware(handler)
 	handler = server.AuthMiddleware(handler)
 

@@ -56,6 +56,12 @@
         </tbody>
     </table>
     <h2>Topics</h2>
+    {{if not .Topics}}
+    <div class="empty-state">
+        <i>📂</i>
+        No topics found in this bundle.
+    </div>
+    {{else}}
     <table id="topics-table">
         <thead>
             <tr>
@@ -79,6 +85,7 @@
             {{end}}
         </tbody>
     </table>
+    {{end}}
     <script src="/static/common.js"></script>
     <script src="/static/partitions_view.js"></script>
     {{template "modal" .}}

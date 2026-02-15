@@ -137,7 +137,13 @@ if (!window.logsViewInitialized) {
     window.fetchLogs = async function() {
         if (window.isFetching || !window.hasMoreLogsServer) return;
         window.isFetching = true;
-        if (window.loadingIndicator) window.loadingIndicator.textContent = 'Loading logs...';
+        
+        // Show localized spinner in the loading indicator
+        const indicator = window.loadingIndicator;
+        if (indicator) {
+            indicator.innerHTML = '<div id="local-spinner" class="htmx-indicator" style="display:inline-block; margin-right:10px;"></div> Loading more logs...';
+            indicator.classList.add('htmx-request');
+        }
 
         const url = window.buildApiUrl(window.serverOffset, window.serverLimit);
 
@@ -153,7 +159,8 @@ if (!window.logsViewInitialized) {
                         ...log,
                         escapedMsg: escapedMsg,
                         linkedMsg: linkifyMessage(escapedMsg),
-                        hasTrace: log.message.includes('\n')
+                        hasTrace: log.message.includes('\n'),
+                        severityClass: log.level === 'ERROR' ? 'severity-error' : (log.level === 'WARN' ? 'severity-warn' : '')
                     };
                 });
 
@@ -181,17 +188,18 @@ if (!window.logsViewInitialized) {
             } else {
                 window.hasMoreLogsServer = false;
                 if (window.allLogs.length === 0 && window.logTableBody) {
-                    window.logTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No logs found.</td></tr>';
+                    window.logTableBody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><i>🔍</i>No logs found matching your criteria. Try broadening your filters.</div></td></tr>';
                 }
             }
         } catch (error) {
             console.error("Fetch error:", error);
-            if (window.loadingIndicator) window.loadingIndicator.textContent = 'Error loading logs.';
+            if (indicator) indicator.textContent = 'Error loading logs.';
         } finally {
             window.isFetching = false;
             window.renderFrameRequestId = null;
-            if (window.loadingIndicator) {
-                 window.loadingIndicator.textContent = window.hasMoreLogsServer ? 'Scroll for more...' : 'End of logs.';
+            if (indicator) {
+                 indicator.classList.remove('htmx-request');
+                 indicator.textContent = window.hasMoreLogsServer ? 'Scroll for more...' : 'End of logs.';
             }
         }
     };
@@ -252,7 +260,7 @@ if (!window.logsViewInitialized) {
         for (let i = startIndex; i < endIndex; i++) {
             const log = window.allLogs[i];
             const tr = document.createElement('tr');
-            tr.className = 'log-row';
+            tr.className = 'log-row ' + (log.severityClass || '');
             tr.style.height = `${window.rowHeight}px`; // Enforce height
             
             // View Trace Button
@@ -271,26 +279,27 @@ if (!window.logsViewInitialized) {
 
             // Message Display (Truncated if too long for one line, but we rely on CSS mostly)
             // We use a div inside the cell to enforce max-height/ellipsis if needed
-            // Updated to allow 3 lines of wrapping
-            const messageHtml = `<div style="max-height: ${window.rowHeight}px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; line-height: 1.4;">
-                ${insightHtml}
-                ${log.linkedMsg}
-            </div>`;
+            // Updated to allow 3 lines of wrapping by default, expandable on click
+            const messageHtml = `
+                <div class="log-message-container" onclick="this.classList.toggle('expanded')">
+                    ${insightHtml}
+                    ${log.linkedMsg}
+                </div>`;
 
             const pinBtnClass = log.isPinned ? 'pin-btn pinned' : 'pin-btn';
             const pinBtnText = log.isPinned ? '★' : '☆';
 
             tr.innerHTML = `
-                <td style="white-space:nowrap;">${new Date(log.timestamp).toISOString().replace('T', ' ').substring(0, 23)}</td>
-                <td class="log-level-${log.level}">${log.level}</td>
-                <td>${log.node}</td>
-                <td>${log.shard}</td>
+                <td class="col-timestamp">${new Date(log.timestamp).toISOString().replace('T', ' ').substring(0, 23)}</td>
+                <td class="log-level-${log.level} col-level">${log.level}</td>
+                <td class="col-node">${log.node}</td>
+                <td class="col-shard">${log.shard}</td>
                 <td>${log.component}</td>
-                <td style="max-width: 0; width: 40%; overflow: hidden;">${messageHtml}</td>
-                <td>
+                <td class="log-message-cell">${messageHtml}</td>
+                <td style="width: 120px;">
                     <div style="display: flex; gap: 5px; align-items: center;">
                         <button class="${pinBtnClass}" onclick="togglePin(${i})" title="${log.isPinned ? 'Unpin' : 'Pin to Notebook'}">${pinBtnText}</button>
-                        <button onclick="showLogContext('${log.filePath}', ${log.lineNumber})" style="font-size: 0.8em;">Context</button>
+                        <button onclick="showLogContext('${log.filePath}', ${log.lineNumber})" style="font-size: 0.8em; padding: 2px 6px;">Context</button>
                         <a href="/metrics?t=${log.timestamp}" class="button" style="font-size: 0.8em; padding: 2px 6px; background-color: var(--primary-color);">Metrics</a>
                         ${actionBtn}
                     </div>

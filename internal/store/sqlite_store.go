@@ -22,7 +22,7 @@ type SQLiteStore struct {
 	mu sync.RWMutex
 }
 
-func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore, error) {
+func NewSQLiteStore(dbPath string, bundlePath string, clean bool, memoryLimit int64) (*SQLiteStore, error) {
 	// Check if we need to wipe the DB (if clean flag set, bundle path changed, or DB invalid)
 	if clean || shouldWipeDB(dbPath, bundlePath) {
 		slog.Info("Creating fresh database", "db", dbPath, "reason", getWipeReason(clean, dbPath, bundlePath))
@@ -37,14 +37,25 @@ func NewSQLiteStore(dbPath string, bundlePath string, clean bool) (*SQLiteStore,
 	}
 
 	// Performance Optimizations
+	// Default to 500MB cache and 30GB mmap if not limited
+	cacheSizeKB := int64(500000)
+	mmapSize := int64(30000000000)
+
+	if memoryLimit > 0 {
+		// If we have a limit, allocate 25% to cache and 50% to mmap (up to a reasonable max)
+		cacheSizeKB = (memoryLimit / 4) / 1024
+		mmapSize = memoryLimit / 2
+		slog.Info("Applying memory limits to SQLite", "cache_kb", cacheSizeKB, "mmap_bytes", mmapSize)
+	}
+
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",      // Better concurrency
 		"PRAGMA synchronous=NORMAL;",    // Good balance of safety and speed
 		"PRAGMA locking_mode=EXCLUSIVE;", // Exclusive access for speed
 		"PRAGMA page_size=65536;",       // 64KB page size
 		"PRAGMA temp_store=MEMORY;",     // Temp tables in RAM
-		"PRAGMA cache_size=-500000;",    // ~500MB cache
-		"PRAGMA mmap_size=30000000000;", // Memory map up to 30GB (if available)
+		fmt.Sprintf("PRAGMA cache_size=-%d;", cacheSizeKB),
+		fmt.Sprintf("PRAGMA mmap_size=%d;", mmapSize),
 		"PRAGMA count_changes=OFF;",     // Don't count changes
 		"PRAGMA threads=4;",             // Parallel query execution
 		"PRAGMA secure_delete=OFF;",     // Faster deletes

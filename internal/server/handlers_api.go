@@ -111,7 +111,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sqliteStore, err := store.NewSQLiteStore(dbPath, bundlePath, cleanDB)
+	sqliteStore, err := store.NewSQLiteStore(dbPath, bundlePath, cleanDB, s.memoryLimit)
 	if err != nil {
 		s.logger.Error("Failed to initialize SQLite store", "error", err)
 		http.Error(w, "Failed to initialize database: "+err.Error(), http.StatusInternalServerError)
@@ -358,6 +358,30 @@ func (s *Server) apiRaftTimelineHandler(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(events); err != nil {
 		s.logger.Error("Error encoding raft events", "error", err)
 	}
+}
+
+func (s *Server) apiLogsUpdateNoteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := r.URL.Query().Get("id")
+	note := r.FormValue("note")
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UpdatePinNote(id, note); err != nil {
+		s.logger.Error("Error updating pin note", "id", id, "error", err)
+		http.Error(w, "Failed to update note", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // Lazy loading handler for large datasets

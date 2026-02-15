@@ -6,33 +6,32 @@ BundleViewer is a specialized offline analysis tool designed for **Redpanda diag
 
 ## 🚀 Key Features
 
-*   **Hybrid Architecture:** 
-    *   **In-Memory:** Critical metadata (Kubernetes resources, Kafka topic configurations, disk usage) is parsed and held in memory for instant access.
-    *   **SQLite-Backed:** High-volume data (logs, Prometheus metrics, CPU profiles) is ingested into an embedded SQLite database.
+*   **Hybrid Accelerated Architecture:** 
+    *   **Zig Sidecar:** Uses a high-performance **Zig engine with SIMD instructions** to accelerate log scanning, Prometheus metric parsing, and pattern fingerprinting.
+    *   **SQLite-Backed:** High-volume data is ingested into an optimized SQLite database with **WAL mode** and **30GB+ memory-mapping** for near-instant searches.
 *   **Advanced Log Analysis:**
-    *   **Full-Text Search:** Utilizes SQLite's **FTS5** extension for lightning-fast global search across gigabytes of log data.
-    *   **Pattern Fingerprinting:** Automatically clusters similar log messages to identify recurring errors and anomalies without drowning in noise.
-*   **Automated Diagnostics (Auditor):** Runs 50+ heuristic checks across:
-    *   **OS Tuning:** Verifies `sysctl` settings (AIO, network backlogs, virtual memory).
-    *   **Cluster Health:** Detects Under-Replicated Partitions (URP), leaderless partitions, and controller instability.
-    *   **Performance Bottlenecks:** Identifies CPU, Disk, and Network saturation.
-    *   **Infrastructure:** Checks for OOM events, RAID degradation, and Kubernetes pod restarts.
+    *   **Full-Text Search:** Lightning-fast global search across gigabytes of log data using SQLite's **FTS5** trigram tokenizer.
+    *   **SIMD Fingerprinting:** Vectorized clustering of log messages to identify recurring errors and anomalies at memory speed.
+*   **Expert Diagnostics:** Automatically detects complex failure modes based on real-world Redpanda internals:
+    *   **Hardware Audit:** Validates disk throughput against the **"4/30" minimum threshold** (4MB/s small block, 30MB/s medium block).
+    *   **Performance Bottlenecks:** Detects Seastar reactor spinning, Schema Registry reference building issues, and Raft state machine recovery loops.
+    *   **Memory Intelligence:** Accounts for **Batch Cache reclaim** logic ("Healthy Zero") and flags heap fragmentation risks on long-running nodes.
+    *   **Safety Audits:** Warns of data loss risks from **unclean reconfiguration aborts**.
 *   **Rich Visualizations:**
     *   **Timeline View:** Unified event stream correlating logs and K8s events across all nodes.
-    *   **Skew Analysis:** Detects uneven distribution of partitions and topics across shards and disks.
-    *   **CPU Profiling:** Visualizes reactor utilization and hot paths from internal Redpanda CPU profiles.
+    *   **CPU Profiling:** Visualizes reactor utilization with **Smart Insights** that automatically flag known code-level bottlenecks.
     *   **Metric Dashboards:** Interactive charts for reactor utilization, I/O queue depth, and throughput.
 
 ## 🛠️ Prerequisites
 
 *   **Go:** Version 1.25 or higher.
-*   **Task:** [Taskfile](https://taskfile.dev/) is used for build automation (optional, but recommended).
-*   **SQLite:** The project uses `modernc.org/sqlite` (pure Go), so no CGO or external SQLite installation is required.
+*   **Zig:** Version 0.15.2 or higher (required for building the native accelerator).
+*   **Task:** [Taskfile](https://taskfile.dev/) is used for orchestrating the hybrid Go/Zig build.
 
 ## 📦 Installation
 
 ### 1. One-Line Installation (Recommended)
-Install the latest version directly to `/usr/local/bin`:
+Install the latest pre-compiled version directly to `/usr/local/bin`. The distributed binaries are statically linked and include the Zig accelerator pre-built:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/install.sh | sh
@@ -46,11 +45,12 @@ curl -fsSL https://raw.githubusercontent.com/alextreichler/bundleViewer/main/ins
     cd bundleViewer
     ```
 
-2.  **Build the binary:**
+2.  **Build the hybrid binary:**
+    The project uses a specialized build pipeline that uses **Zig as a C compiler** to ensure static linking and easy cross-compilation.
     ```bash
     task build
     ```
-    *Or use `go build -o bundleViewer cmd/webapp/main.go`*
+    This will produce optimized binaries for both macOS and Linux in the `dist/` directory.
 
 ## 🖥️ Usage
 
@@ -68,9 +68,20 @@ Provide the path directly via the CLI:
 bundleViewer /path/to/extracted/bundle
 ```
 
+### ☁️ Cloud & Ad-hoc Usage
+BundleViewer is optimized for ephemeral container environments (AWS EKS, Fargate, etc.). It supports:
+*   **Automatic Fetching:** Download and extract bundles directly from S3/HTTPS.
+*   **One-Shot Mode:** Immutable, stateless analysis for single-investigation pods.
+*   **Auto-Cleanup:** Self-terminates after a period of inactivity to save costs.
+*   **Resource Tuning:** Scales its memory footprint to fit your container limits.
+
+See the **[Cloud Deployment Guide](CLOUD_DEPLOYMENT.md)** for more details.
+
 ### CLI Options
 *   `-port <int>`: Port to listen on (default: `7575`).
 *   `-host <string>`: Host to bind to (default: `127.0.0.1`).
+*   `-one-shot`: Enable stateless mode (disables bundle switching).
+*   `-memory-limit <string>`: Cap memory usage (e.g. `2GB`).
 *   `-persist`: Keep the SQLite database (`bundle.db`) after the server stops.
 *   `-logs-only`: Only process and display logs (faster loading).
 
@@ -84,12 +95,12 @@ bundleViewer /path/to/extracted/bundle
 
 ## 🏗️ Architecture
 
-The project follows a standard Go project layout:
+The project follows a hybrid Go/Zig project layout:
 
-*   `internal/parser/`: Specialized logic for Redpanda logs, metrics, admin API responses, and Linux system files (`sar`, `vmstat`, `sysctl`).
-*   `internal/store/`: Database layer. High-performance bulk insertion and FTS indexing using SQLite.
-*   `internal/analysis/`: Logic for log fingerprinting, performance heuristics, and partition skew calculations.
-*   `internal/diagnostics/`: The "Auditor" engine that runs automated health checks.
-*   `internal/server/`: HTMX-powered web server providing a responsive, zero-build-step UI.
-*   `ui/`: Embedded HTML templates and static assets.
+*   **`internal/parser/native/`**: High-performance Zig parsing engine using SIMD vectors.
+*   **`internal/parser/`**: Go bridge for the Zig engine and standard parsers for Linux system files (`sar`, `vmstat`, `sysctl`).
+*   **`internal/store/`**: Optimized database layer using WAL-mode SQLite for high concurrency.
+*   **`internal/analysis/`**: Expert-system heuristics for performance, memory, and hardware validation.
+*   **`internal/diagnostics/`**: The "Auditor" engine that runs automated health checks.
+*   **`internal/server/`**: HTMX-powered web server providing a responsive, zero-build-step UI.
 

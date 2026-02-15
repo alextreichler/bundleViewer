@@ -39,25 +39,27 @@
     {{end}}
 
     <div class="theme-switch-wrapper" style="display: flex; gap: 10px; align-items: center;">
-        {{if .Sessions}}
-        <div class="theme-selection-container">
-            <button class="bundle-select-btn">
-                {{if gt (len .Sessions) 1}}
-                    Switch Bundles
-                {{else}}
-                    Analyze new bundle
-                {{end}}
-            </button>
-            <div class="bundle-select-menu">
-                {{range $path, $session := .Sessions}}
-                <button class="bundle-select-option" onclick="window.location.href='/api/switch-bundle?path={{$path}}'">{{$session.Name}}</button>
-                {{end}}
-                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 4px 0;">
-                <button class="bundle-select-option" onclick="window.location.href='/setup'">+ Analyze New Bundle</button>
+        {{if not .OneShot}}
+            {{if .Sessions}}
+            <div class="theme-selection-container">
+                <button class="bundle-select-btn">
+                    {{if gt (len .Sessions) 1}}
+                        Switch Bundles
+                    {{else}}
+                        Analyze new bundle
+                    {{end}}
+                </button>
+                <div class="bundle-select-menu">
+                    {{range $path, $session := .Sessions}}
+                    <button class="bundle-select-option" onclick="window.location.href='/api/switch-bundle?path={{$path}}'">{{$session.Name}}</button>
+                    {{end}}
+                    <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 4px 0;">
+                    <button class="bundle-select-option" onclick="window.location.href='/setup'">+ Analyze New Bundle</button>
+                </div>
             </div>
-        </div>
-        {{else}}
-        <a href="/setup" class="button" style="padding: 4px 12px; font-size: 0.75rem; background-color: var(--card-bg); color: var(--text-color); border: 1px solid var(--border-color);">Analyze New Bundle</a>
+            {{else}}
+            <a href="/setup" class="button" style="padding: 4px 12px; font-size: 0.75rem; background-color: var(--card-bg); color: var(--text-color); border: 1px solid var(--border-color);">Analyze New Bundle</a>
+            {{end}}
         {{end}}
 
         <div class="theme-selection-container">

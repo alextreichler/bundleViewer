@@ -16,6 +16,7 @@ import (
 	"github.com/alextreichler/bundleViewer/internal/cache"
 	"github.com/alextreichler/bundleViewer/internal/downloader"
 	"github.com/alextreichler/bundleViewer/internal/models"
+	"github.com/alextreichler/bundleViewer/internal/parser"
 	"github.com/alextreichler/bundleViewer/internal/server"
 	"github.com/alextreichler/bundleViewer/internal/store"
 	"github.com/alextreichler/bundleViewer/internal/version"
@@ -42,12 +43,50 @@ func openBrowser(url string) {
 }
 
 func main() {
-	port := flag.Int("port", 7575, "Port to listen on")
-	host := flag.String("host", "127.0.0.1", "Host to bind to (default: 127.0.0.1 for security)")
-	fetchURL := flag.String("fetch-url", "", "URL to download and extract a bundle from")
+	envPort := 7575
+	if p := os.Getenv("PORT"); p != "" {
+		if val, err := fmt.Sscanf(p, "%d", &envPort); err == nil && val > 0 {
+			// use envPort
+		}
+	}
+	port := flag.Int("port", envPort, "Port to listen on (can also be set via PORT env var)")
+
+	envHost := "127.0.0.1"
+	if h := os.Getenv("HOST"); h != "" {
+		envHost = h
+	}
+	host := flag.String("host", envHost, "Host to bind to (default: 127.0.0.1 for security, use 0.0.0.0 for containers) (can also be set via HOST env var)")
+	
+	// Support environment variables for cloud/container usage
+	envFetchURL := os.Getenv("FETCH_URL")
+	fetchURL := flag.String("fetch-url", envFetchURL, "URL to download and extract a bundle from (can also be set via FETCH_URL env var)")
+	
 	authToken := flag.String("auth-token", os.Getenv("AUTH_TOKEN"), "Secret token required to access the UI (can also be set via AUTH_TOKEN env var)")
-	shutdownTimeout := flag.Duration("shutdown-timeout", 0, "Hard limit on server lifetime (e.g., 20m). 0 means no limit.")
-	inactivityTimeout := flag.Duration("inactivity-timeout", 0, "Inactivity timeout (e.g., 5m). Shutdown if no UI heartbeats received. 0 means no limit.")
+	
+	envShutdown := os.Getenv("SHUTDOWN_TIMEOUT")
+	defaultShutdown := time.Duration(0)
+	if envShutdown != "" {
+		if d, err := time.ParseDuration(envShutdown); err == nil {
+			defaultShutdown = d
+		}
+	}
+	shutdownTimeout := flag.Duration("shutdown-timeout", defaultShutdown, "Hard limit on server lifetime (e.g., 20m). 0 means no limit. (can also be set via SHUTDOWN_TIMEOUT env var)")
+	
+	envInactivity := os.Getenv("INACTIVITY_TIMEOUT")
+	defaultInactivity := time.Duration(0)
+	if envInactivity != "" {
+		if d, err := time.ParseDuration(envInactivity); err == nil {
+			defaultInactivity = d
+		}
+	}
+	inactivityTimeout := flag.Duration("inactivity-timeout", defaultInactivity, "Inactivity timeout (e.g., 5m). Shutdown if no UI heartbeats received. 0 means no limit. (can also be set via INACTIVITY_TIMEOUT env var)")
+	
+	envMemoryLimit := os.Getenv("MEMORY_LIMIT")
+	memoryLimit := flag.String("memory-limit", envMemoryLimit, "Memory limit for the application (e.g., 2GB, 512MB). Adjusts SQLite cache and mmap. (can also be set via MEMORY_LIMIT env var)")
+
+	envOneShot := os.Getenv("ONE_SHOT") == "true"
+	oneShot := flag.Bool("one-shot", envOneShot, "One-shot mode: analyzes provided bundle and serves it in read-only mode. Disables bundle switching. (can also be set via ONE_SHOT=true env var)")
+
 	persist := flag.Bool("persist", false, "Persist the database between runs (default: clean on start)")
 	logsOnly := flag.Bool("logs-only", false, "Only process and display logs")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -135,13 +174,15 @@ func main() {
 	var cachedData *cache.CachedData
 	var initialProgress *models.ProgressTracker
 
+	limitBytes, _ := parser.ParseSizeToBytes(*memoryLimit)
+
 	if bundlePath != "" {
 		// Determine if we should clean the DB (default true, unless -persist is set)
 		cleanDB := !*persist
 
 		// Initialize the SQLite store
 		dbPath := filepath.Join(dataDir, "bundle.db")
-		sqliteStore, err = store.NewSQLiteStore(dbPath, bundlePath, cleanDB)
+		sqliteStore, err = store.NewSQLiteStore(dbPath, bundlePath, cleanDB, limitBytes)
 		if err != nil {
 			logger.Error("Failed to initialize SQLite store", "error", err)
 			os.Exit(1)
@@ -164,7 +205,7 @@ func main() {
 		storeInterface = sqliteStore
 	}
 
-	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress, Version, latestVersion, *authToken, *shutdownTimeout, *inactivityTimeout) // Pass logger, logsOnly, persist
+	srv, err := server.New(bundlePath, cachedData, storeInterface, logger, *logsOnly, *persist, initialProgress, Version, latestVersion, *authToken, *shutdownTimeout, *inactivityTimeout, limitBytes, *oneShot) // Pass logger, logsOnly, persist
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)

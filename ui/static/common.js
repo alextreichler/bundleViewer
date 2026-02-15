@@ -94,6 +94,7 @@ if (document.readyState === 'loading') {
         initDeepLinking();
         initHeartbeat();
         initNavigationLoading();
+        initGlobalSearchHotkey();
         // Add HTMX listener
         document.body.addEventListener('htmx:afterOnLoad', function(evt) {
             initDeepLinking();
@@ -101,12 +102,42 @@ if (document.readyState === 'loading') {
     });
 } else {
     initDeepLinking();
+    initHeartbeat();
     initNavigationLoading();
+    initGlobalSearchHotkey();
     if (!window.htmxCommonListenerAdded) {
         document.body.addEventListener('htmx:afterOnLoad', function(evt) {
             initDeepLinking();
         });
         window.htmxCommonListenerAdded = true;
+    }
+}
+
+function initGlobalSearchHotkey() {
+    document.addEventListener('keydown', (e) => {
+        // Hotkey: / or Ctrl+K
+        if (e.key === '/' || (e.ctrlKey && e.key === 'k') || (e.metaKey && e.key === 'k')) {
+            const queryInput = document.getElementById('query-input') || document.querySelector('form[action="/search"] input[type="text"]');
+            if (queryInput && document.activeElement !== queryInput) {
+                e.preventDefault();
+                queryInput.focus();
+                queryInput.select();
+            }
+        }
+    });
+}
+
+function showLocalizedSpinner(elementId) {
+    const el = document.getElementById(elementId);
+    if (el) {
+        el.classList.add('htmx-request');
+    }
+}
+
+function hideLocalizedSpinner(elementId) {
+    const el = document.getElementById(elementId);
+    if (el) {
+        el.classList.remove('htmx-request');
     }
 }
 
